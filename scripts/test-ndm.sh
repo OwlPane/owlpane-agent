@@ -14,7 +14,7 @@ fi
 cat > "$BIN/snmpwalk" <<'EOF'
 #!/bin/sh
 # Canned -Onq output keyed by the final OID arg; counters grow by a file-backed step.
-oid="${!#}"
+oid=$(eval "printf '%s' \"\${$#}\"")
 state="/tmp/ndm-stub-count"
 n=1; [ -f "$state" ] && n=$(( $(cat "$state") + 1 )); echo "$n" > "$state"
 in=$((1000000 * n)); out=$((2000000 * n))
@@ -50,7 +50,7 @@ EOF
 
 cat > "$BIN/snmpget" <<'EOF'
 #!/bin/sh
-oid="${!#}"
+oid=$(eval "printf '%s' \"\${$#}\"")
 case "$oid" in
   1.3.6.1.2.1.1.5.0) echo "core-switch" ;;
   1.3.6.1.2.1.1.1.0) echo "Cisco IOS Software, C2960 Software" ;;
