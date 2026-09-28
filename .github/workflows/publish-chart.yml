@@ -19,3 +19,16 @@ jobs:
           helm package .
           echo "${{ github.token }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push owlpane-agent-*.tgz "oci://ghcr.io/${OWNER}"
+      - name: Sign chart (keyless, non-blocking)
+        continue-on-error: true
+        uses: sigstore/cosign-installer@v3
+      - name: Cosign sign pushed chart
+        continue-on-error: true
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          VERSION=$(grep '^version:' Chart.yaml | awk '{print $2}')
+          # Signs the OCI artifact in GHCR; the signature lives in the registry,
+          # so customers can verify with `cosign verify ghcr.io/<owner>/owlpane-agent:$VERSION`.
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          cosign sign --yes "ghcr.io/${OWNER}/owlpane-agent:${VERSION}"

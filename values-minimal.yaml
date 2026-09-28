@@ -1,0 +1,13 @@
+# Smallest useful install: node metrics only. Cluster explorer stays empty until you enable the collector.
+clusterCollector:
+  enabled: false
+nodeAgent:
+  collectionInterval: 60s
+logs:
+  enabled: false
+integrations:
+  enabled: false
+networkCollector:
+  enabled: false
+ops:
+  enabled: false

@@ -1,0 +1,179 @@
+{{- if and .Values.ops.enabled (not .Values.apiEndpoint) }}
+{{- fail "apiEndpoint is required when ops.enabled is true (the agent polls the Owlpane API)" }}
+{{- end }}
+{{- if .Values.apiEndpoint }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: owlpane-ops-runner
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+data:
+  ops.sh: |
+    #!/bin/sh
+    set -u
+    API="${OWLPANE_API_ENDPOINT:?api endpoint required}"
+    API="${API%/}"
+    CLUSTER="${OWLPANE_CLUSTER_NAME:?cluster name required}"
+    KEY="${OWLPANE_INGEST_KEY:?missing ingest key}"
+    POLL="${OWLPANE_OPS_POLL_SECONDS:-20}"
+    OPS="${OWLPANE_OPS_ENABLED:-false}"
+    VER="${OWLPANE_AGENT_VERSION:-}"
+    NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$'
+
+    ok_name() { printf '%s' "$1" | grep -Eq "$NAME_RE"; }
+
+    # Nest/JSON may use "key": "value" (space after colon).
+    json_str() {
+      printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -1
+    }
+
+    heartbeat() {
+      curl -sS -o /tmp/hb.json -w '%{http_code}' -X POST "$API/v1/kubernetes/agent/heartbeat" \
+        -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+        -d "{\"cluster\":\"$CLUSTER\",\"agentVersion\":\"$VER\",\"ops\":$OPS}" || echo 000
+    }
+
+    apply_op() {
+      body=$(cat /tmp/op.json)
+      case "$body" in *'"operation":null'*|*'"operation": null'*) return 3 ;; esac
+      action=$(json_str "$body" action)
+      kind=$(json_str "$body" kind)
+      ns=$(json_str "$body" namespace)
+      name=$(json_str "$body" name)
+      replicas=$(printf '%s' "$body" | sed -n 's/.*"replicas"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+      storage=$(json_str "$body" storage)
+      ok_name "$name" || return 2
+      if [ -n "$ns" ]; then ok_name "$ns" || return 2; fi
+      case "$action" in
+        scale)
+          [ "$kind" = "Deployment" ] || [ "$kind" = "StatefulSet" ] || return 2
+          [ -n "$replicas" ] || return 2
+          kubectl scale "$kind/$name" -n "$ns" --replicas="$replicas"
+          ;;
+        restart)
+          [ "$kind" = "Deployment" ] || [ "$kind" = "StatefulSet" ] || [ "$kind" = "DaemonSet" ] || return 2
+          kubectl rollout restart "$kind/$name" -n "$ns"
+          ;;
+        delete-pod)
+          [ "$kind" = "Pod" ] || return 2
+          kubectl delete pod "$name" -n "$ns" --wait=false
+          ;;
+        expand-pvc)
+          [ "$kind" = "PersistentVolumeClaim" ] || return 2
+          printf '%s' "$storage" | grep -Eq '^[0-9]+(Ki|Mi|Gi|Ti)$' || return 2
+          kubectl patch pvc "$name" -n "$ns" --type merge -p "{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"$storage\"}}}}"
+          ;;
+        apply-netpol)
+          [ "$kind" = "NetworkPolicy" ] || return 2
+          b64=$(json_str "$(cat /tmp/op.json)" manifest_b64)
+          [ -n "$b64" ] || return 2
+          printf '%s' "$b64" | base64 -d > /tmp/netpol.yaml
+          # Single NetworkPolicy document only — reject multi-doc or extra kinds.
+          [ "$(grep -c '^kind:' /tmp/netpol.yaml)" = "1" ] || return 2
+          grep -q '^kind: NetworkPolicy$' /tmp/netpol.yaml || return 2
+          wc -c < /tmp/netpol.yaml | awk '{ exit ($1 > 20000) }' || return 2
+          kubectl apply --dry-run=server -f /tmp/netpol.yaml && kubectl apply -f /tmp/netpol.yaml
+          ;;
+        *)
+          return 2
+          ;;
+      esac
+    }
+
+    while true; do
+      code=$(heartbeat | tail -n 1)
+      case "$code" in
+        200) ;;
+        403) echo "heartbeat 403: link this cluster in the Owlpane console first (Kubernetes → Add cluster)" >&2 ;;
+        429) echo "heartbeat rate-limited; backing off one poll" >&2; sleep "$POLL" ;;
+        *)   echo "heartbeat failed: HTTP $code (will retry)" >&2 ;;
+      esac
+      if [ "$OPS" = "true" ]; then
+        status=$(curl -sS -o /tmp/op.json -w '%{http_code}' -X POST "$API/v1/kubernetes/agent/ops/claim" \
+          -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+          -d "{\"cluster\":\"$CLUSTER\"}" || echo 000)
+        if [ "$status" = "429" ]; then
+          sleep "$POLL"
+          continue
+        fi
+        if [ "$status" = "200" ]; then
+          body=$(cat /tmp/op.json)
+          case "$body" in *'"operation":null'*|*'"operation": null'*) : ;;
+          *)
+            id=$(json_str "$body" id)
+            if apply_op; then
+              [ -n "$id" ] && curl -sS -o /dev/null -X POST "$API/v1/kubernetes/agent/ops/$id/result" \
+                -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+                -d '{"status":"applied"}' || true
+            else
+              rc=$?
+              if [ "$rc" -ne 3 ] && [ -n "$id" ]; then
+                curl -sS -o /dev/null -X POST "$API/v1/kubernetes/agent/ops/$id/result" \
+                  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+                  -d '{"status":"failed","error":"kubectl rejected the operation"}' || true
+              fi
+            fi
+          ;;
+          esac
+        fi
+      fi
+      sleep "$POLL"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: owlpane-ops-runner
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: {{ include "owlpane.appName" . }}, app.kubernetes.io/component: ops }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "owlpane.appName" . }}
+        app.kubernetes.io/component: ops
+    spec:
+      serviceAccountName: {{ include "owlpane.sa" . }}
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: runner
+          {{- $opsImg := .Values.ops.image | default dict }}
+          image: "{{ $opsImg.repository | default "alpine/k8s" }}:{{ $opsImg.tag | default "1.31.4" }}"
+          imagePullPolicy: {{ $opsImg.pullPolicy | default "IfNotPresent" }}
+          command: ["/bin/sh", "/scripts/ops.sh"]
+          env:
+            - name: OWLPANE_API_ENDPOINT
+              value: {{ .Values.apiEndpoint | quote }}
+            - name: OWLPANE_CLUSTER_NAME
+              value: {{ .Values.cluster.name | quote }}
+            - name: OWLPANE_OPS_ENABLED
+              value: {{ .Values.ops.enabled | quote }}
+            - name: OWLPANE_OPS_POLL_SECONDS
+              value: {{ .Values.ops.pollSeconds | quote }}
+            - name: OWLPANE_AGENT_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+            - name: OWLPANE_INGEST_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ingestKeySecret.name }}
+                  key: {{ .Values.ingestKeySecret.key }}
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources: {{- toYaml .Values.ops.resources | nindent 12 }}
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: scripts
+          configMap: { name: owlpane-ops-runner, defaultMode: 0555 }
+        - name: tmp
+          emptyDir: {}
+{{- end }}

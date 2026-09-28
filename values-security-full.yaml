@@ -1,5 +1,5 @@
 # Example values for profile: security-full
-#   helm upgrade --install owlpane-agent ./deploy/helm/owlpane-agent -f values-security-full.yaml \
+#   helm upgrade --install owlpane-agent oci://ghcr.io/balaji-singh/owlpane-agent -f values-security-full.yaml \
 #     --set endpoint=https://ingest.example.com --set cluster.name=my-cluster
 
 profile: security-full

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails if the agent's ClusterRole ever gains a write verb or access to secrets/configmaps/exec/logs.
+# Fails if the agent's ClusterRole ever gains a write verb or access to secrets/exec/logs.
 set -euo pipefail
 cd "$(dirname "$0")/.."   # the chart is this repository's root (it was deploy/helm/owlpane-agent in the monorepo)
 ROOT="$(pwd)"
@@ -21,7 +21,7 @@ import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
 roles = [d for d in docs if d["kind"] in ("ClusterRole", "Role")]
 assert roles, "no role rendered"
-bad = {"secrets", "configmaps", "pods/exec", "pods/log", "pods/attach", "serviceaccounts", "*"}
+bad = {"secrets", "pods/exec", "pods/log", "pods/attach", "serviceaccounts", "*"}
 for r in roles:
     for rule in r["rules"]:
         assert set(rule["verbs"]) <= {"get", "list", "watch"}, f"write verb in {rule}"
@@ -35,6 +35,75 @@ for d in docs:
             assert sc["allowPrivilegeEscalation"] is False and sc["readOnlyRootFilesystem"] is True and sc["capabilities"]["drop"] == ["ALL"], f"weak container security in {name}"
         assert "hostNetwork" not in d["spec"]["template"]["spec"], "hostNetwork requested"
 print("PASS: read-only RBAC, no secrets access, hardened containers")
+PY
+
+# Operations stay off unless explicitly enabled, and even then the extra role is allowlisted.
+OPS="$(mktemp)"
+helm template t . -n owlpane --set endpoint=https://ingest.example.com --set cluster.name=t --set apiEndpoint=https://api.example.com --set ops.enabled=true > "$OPS"
+"$PYTHON" - "$OPS" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+ops = [d for d in docs if d["kind"] == "ClusterRole" and d["metadata"]["name"].endswith("-ops-owlpane")]
+assert len(ops) == 1, "ops ClusterRole missing"
+allowed = {("apps", "deployments"), ("apps", "statefulsets"), ("apps", "daemonsets"), ("", "pods"), ("", "persistentvolumeclaims"), ("networking.k8s.io", "networkpolicies")}
+for rule in ops[0]["rules"]:
+    assert "*" not in rule["verbs"]
+    assert not ({"secrets", "configmaps", "pods/exec"} & set(rule["resources"]))
+    for res in rule["resources"]:
+        assert (rule["apiGroups"][0], res) in allowed, (rule["apiGroups"], res)
+runner = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "owlpane-ops-runner")
+c = runner["spec"]["template"]["spec"]["containers"][0]
+sc = c["securityContext"]
+assert sc["allowPrivilegeEscalation"] is False and sc["readOnlyRootFilesystem"] is True
+script = next(d["data"]["ops.sh"] for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "owlpane-ops-runner")
+assert "/v1/kubernetes/agent/ops/claim" in script and "rollout restart" in script
+print("PASS: ops runner is opt-in and its role is allowlisted")
+PY
+
+SCOPED="$(mktemp)"
+helm template t . -n owlpane --set endpoint=https://ingest.example.com --set cluster.name=t --set apiEndpoint=https://api.example.com --set ops.enabled=true --set ops.scopeNamespaces[0]=payments > "$SCOPED"
+"$PYTHON" - "$SCOPED" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+assert not any(d["kind"] == "ClusterRole" and "ops" in d["metadata"]["name"] for d in docs), "scoped ops must not render a ClusterRole"
+roles = [d for d in docs if d["kind"] == "Role" and d["metadata"]["namespace"] == "payments"]
+assert roles, "namespaced ops Role missing"
+print("PASS: ops.scopeNamespaces renders a Role, not a ClusterRole")
+PY
+
+# NDM: polls devices over SNMP/ICMP — it must need no Kubernetes API access at all.
+NDM="$(mktemp)"
+helm template t . -n owlpane --set endpoint=https://ingest.example.com --set cluster.name=t --set ndm.enabled=true \
+  --set-json 'ndm.devices=[{"name":"sw","host":"10.0.0.2","communitySecret":{"name":"ndm-sw","key":"community"},"configBackup":{"sshSecret":{"name":"ndm-ssh","userKey":"u","passwordKey":"p"}}}]' \
+  --set ndm.discovery.enabled=true --set ndm.discovery.cidr=10.0.0.0/24 \
+  --set ndm.discovery.communitySecret.name=ndm-disc --set ndm.discovery.communitySecret.key=community \
+  --set ndm.configBackup.enabled=true --set ndm.flow.enabled=true > "$NDM"
+"$PYTHON" - "$NDM" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+ndm_deps = [d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] in ("owlpane-ndm", "owlpane-ndm-flow")]
+assert len(ndm_deps) == 2, "expected owlpane-ndm and owlpane-ndm-flow deployments"
+for dep in ndm_deps:
+    spec = dep["spec"]["template"]["spec"]
+    assert spec.get("automountServiceAccountToken") is False, "ndm pods must not mount a service-account token"
+    for c in spec["containers"]:
+        sc = c["securityContext"]
+        assert sc["runAsNonRoot"] is True and sc["readOnlyRootFilesystem"] is True and sc["allowPrivilegeEscalation"] is False
+        assert sc["capabilities"]["drop"] == ["ALL"]
+        assert sc["capabilities"].get("add", []) in ([], ["NET_RAW"]), "only ping containers may add NET_RAW"
+    assert "hostNetwork" not in spec
+    for c in spec["containers"]:
+        for e in c.get("env", []):
+            if any(s in e["name"] for s in ("COMMUNITY", "SSHPASS", "SSHUSER", "AUTHKEY", "PRIVKEY")):
+                assert "valueFrom" in e, f"{e['name']} must come from a Secret"
+names = {c["name"] for d in ndm_deps for c in d["spec"]["template"]["spec"]["containers"]}
+assert names == {"ndm", "ndm-discovery", "ndm-config", "flow"}, names
+# Flow receiver is a UDP Service, no hostNetwork, no capabilities.
+svc = next(d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == "owlpane-ndm-flow")
+assert svc["spec"]["ports"][0]["protocol"] == "UDP"
+# No ndm-specific RBAC may appear.
+assert not any(d["kind"] in ("Role", "ClusterRole") and "ndm" in d["metadata"]["name"] for d in docs), "ndm must not need Kubernetes RBAC"
+print("PASS: ndm poller + discovery + config backup + flow receiver are tokenless, secret-backed, and add no RBAC")
 PY
 
 # Edge redaction (transform/redact, the count connector that proves it ran) is on by default; a

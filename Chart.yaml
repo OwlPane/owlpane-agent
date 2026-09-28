@@ -2,7 +2,7 @@ apiVersion: v2
 name: owlpane-agent
 description: Owlpane Kubernetes agent — cluster telemetry for the Owlpane SaaS (Helm chart owlpane-agent; install release name owlpane).
 type: application
-version: 0.1.4
+version: 0.2.0
 appVersion: "0.161.0"
 dependencies:
   - name: security-integrations

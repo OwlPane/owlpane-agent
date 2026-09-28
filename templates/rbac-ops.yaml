@@ -1,0 +1,72 @@
+{{- if and .Values.rbac.create .Values.ops.enabled }}
+{{- if .Values.ops.scopeNamespaces }}
+{{- range .Values.ops.scopeNamespaces }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "owlpane.rbacId" $ }}-ops
+  namespace: {{ . }}
+  labels: {{- include "owlpane.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, patch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [networkpolicies]
+    verbs: [get, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "owlpane.rbacId" $ }}-ops
+  namespace: {{ . }}
+  labels: {{- include "owlpane.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "owlpane.rbacId" $ }}-ops
+subjects:
+  - { kind: ServiceAccount, name: {{ include "owlpane.sa" $ }}, namespace: {{ $.Release.Namespace }} }
+---
+{{- end }}
+{{- else }}
+# Opt-in write role for allowlisted cluster operations. Off unless ops.enabled.
+# Separate from the read-only collector role so observe-only installs stay read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "owlpane.rbacId" . }}-ops-{{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, patch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [networkpolicies]
+    verbs: [get, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "owlpane.rbacId" . }}-ops-{{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "owlpane.rbacId" . }}-ops-{{ .Release.Namespace }}
+subjects:
+  - { kind: ServiceAccount, name: {{ include "owlpane.sa" . }}, namespace: {{ .Release.Namespace }} }
+{{- end }}
+{{- end }}

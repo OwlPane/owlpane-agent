@@ -1,0 +1,762 @@
+{{- if .Values.ndm.enabled }}
+{{- include "owlpane.require" . }}
+{{- if and (not .Values.ndm.devices) (not .Values.ndm.discovery.enabled) }}{{ fail "ndm.devices must list at least one device (name + host), or enable ndm.discovery to find them first. Credentials come from Secrets, never from values." }}{{ end }}
+{{- range $d := .Values.ndm.devices }}
+{{- if or (not $d.name) (not $d.host) }}{{ fail "each ndm.devices entry needs name and host" }}{{ end }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$" $d.name) }}{{ fail (printf "ndm device name %q is invalid" $d.name) }}{{ end }}
+{{- if eq (default "v2c" $d.version) "v3" }}
+{{- if not (and $d.v3 $d.v3.userSecret) }}{{ fail (printf "ndm device %s: v3 needs v3.userSecret {name,key}" $d.name) }}{{ end }}
+{{- else }}
+{{- if not $d.communitySecret }}{{ fail (printf "ndm device %s: communitySecret {name,key} is required for v2c — the community string never goes in values" $d.name) }}{{ end }}
+{{- end }}
+{{- end }}
+{{- with .Values.ndm.discovery }}
+{{- if .enabled }}
+{{- if not (regexMatch "^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$" (default "" .cidr)) }}{{ fail "ndm.discovery.cidr must look like 10.0.0.0/24" }}{{ end }}
+{{- $prefix := atoi (regexReplaceAll ".*/" .cidr "") }}
+{{- if lt $prefix 22 }}{{ fail "ndm.discovery.cidr prefix must be /22 or smaller (max 1024 hosts) — scan larger ranges with several /24s" }}{{ end }}
+{{- if not (and .communitySecret .communitySecret.name .communitySecret.key) }}{{ fail "ndm.discovery.communitySecret {name,key} is required — the discovery community never goes in values" }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if .Values.ndm.configBackup.enabled }}
+{{- $withSsh := 0 }}
+{{- range .Values.ndm.devices }}{{ if .configBackup }}{{ $withSsh = add $withSsh 1 }}{{ end }}{{ end }}
+{{- if eq $withSsh 0 }}{{ fail "ndm.configBackup.enabled needs at least one device with configBackup.sshSecret {name,userKey,passwordKey}" }}{{ end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: owlpane-ndm
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+data:
+  poll-devices.sh: |
+    #!/bin/sh
+    # Polls network devices over SNMP (v2c/v3) + ICMP and posts OTLP metrics/logs to Owlpane.
+    # No `set -e`: one unreachable device must not stop the others.
+    set -u
+    CLUSTER="{{ .Values.cluster.name }}"
+    ENVNAME="{{ .Values.environment }}"
+    BASE="{{ .Values.endpoint | trimSuffix "/" }}"
+    INTERVAL="{{ .Values.ndm.intervalSeconds }}"
+    KEY="${OWLPANE_INGEST_KEY:?missing ingest key}"
+    STATE=/tmp/ndm-state
+    mkdir -p "$STATE"
+    MAXIF={{ .Values.ndm.maxInterfacesPerDevice }}
+
+    nano() { echo "$(date +%s)000000000"; }
+    getv() { v="NDM_DEV_${1}_${2}"; eval "printf '%s' \"\${$v:-}\""; }
+    json_safe() { printf '%s' "$1" | tr -d '\\"' | tr -d '[:cntrl:]' | cut -c1-200; }
+
+    snmp_auth() {
+      i=$1
+      if [ "$(getv "$i" VERSION)" = "v3" ]; then
+        u=$(getv "$i" USER); ap=$(getv "$i" AUTHPROTO); ak=$(getv "$i" AUTHKEY); pp=$(getv "$i" PRIVPROTO); pk=$(getv "$i" PRIVKEY)
+        if [ -n "$ak" ] && [ -n "$pk" ]; then
+          printf '%s' "-v3 -l authPriv -u $u -a ${ap:-SHA} -A $ak -x ${pp:-AES} -X $pk"
+        elif [ -n "$ak" ]; then
+          printf '%s' "-v3 -l authNoPriv -u $u -a ${ap:-SHA} -A $ak"
+        else
+          printf '%s' "-v3 -l noAuthNoPriv -u $u"
+        fi
+      else
+        printf '%s' "-v2c -c $(getv "$i" COMMUNITY)"
+      fi
+    }
+
+    # walk <device-index> <oid> -> "ifindex<TAB>value" lines
+    walk() {
+      host=$(getv "$1" HOST)
+      snmpwalk $(snmp_auth "$1") -Onq -t 3 -r 1 "$host" "$2" 2>/dev/null \
+        | sed 's/^\.//' \
+        | awk '{ n=split($1,a,"."); idx=a[n]; $1=""; sub(/^ /,""); gsub(/^"|"$/,""); print idx "\t" $0 }'
+    }
+    # walk_full <device-index> <oid> -> "full-index-suffix<TAB>value" (for composite indexes like LLDP)
+    walk_full() {
+      host=$(getv "$1" HOST)
+      base=$(printf '%s' "$2" | sed 's/^\.//')
+      out=$(snmpwalk $(snmp_auth "$1") -Onq -t 3 -r 1 "$host" "$2" 2>/dev/null) || true
+      printf '%s\n' "$out" | sed 's/^\.//' | awk -v b="$base." '
+        index($1, b) == 1 { idx=substr($1, length(b)+1); $1=""; sub(/^ /,""); gsub(/^"|"$/,""); print idx "\t" $0 }'
+    }
+    # get1 <device-index> <oid> -> scalar value (quotes stripped)
+    get1() {
+      host=$(getv "$1" HOST)
+      snmpget $(snmp_auth "$1") -Onqv -t 3 -r 1 "$host" "$2" 2>/dev/null | tr -d '"' | head -1
+    }
+
+    ping_dev() {
+      PING_LOSS=""; PING_RTT=""
+      out=$(ping -c 2 -W 2 "$1" 2>/dev/null) || true
+      PING_LOSS=$(printf '%s' "$out" | sed -n 's/.*[^0-9]\([0-9][0-9]*\)% packet loss.*/\1/p' | head -1)
+      PING_RTT=$(printf '%s' "$out" | sed -n 's#.*[=/] *[0-9.]*/\([0-9.]*\)/.*#\1#p' | head -1)
+    }
+
+    vendor_of() {
+      ent=$(printf '%s' "$1" | sed 's/^\.//' | awk -F. '{print $7}')
+      case "$ent" in
+        9) echo cisco ;; 2636) echo juniper ;; 12356) echo fortinet ;; 30065) echo arista ;;
+        8072) echo net-snmp ;; 2011) echo huawei ;; 25506) echo hpe ;; 11) echo hp ;;
+        14988) echo mikrotik ;; 41112) echo ubiquiti ;; 9[0-9]*) echo cisco ;;
+        *) echo "" ;;
+      esac
+    }
+
+    # add_dp_attrs <metric-key> <value> <attributes-json> — numeric values only
+    add_dp_attrs() {
+      v="$2"
+      case "$v" in ''|*[!0-9.-]*) return 0 ;; esac
+      printf '%s,' "{\"timeUnixNano\":\"$NOW\",\"asDouble\":$v,\"attributes\":[$3]}" >> "$STATE/dp_$1"
+    }
+
+    # add_dp <metric-key> <value> <device> <iface-or-empty>
+    add_dp() {
+      if [ -n "$4" ]; then
+        a="{\"key\":\"owlpane.ndm.device\",\"value\":{\"stringValue\":\"$3\"}},{\"key\":\"network.interface.name\",\"value\":{\"stringValue\":\"$4\"}}"
+      else
+        a="{\"key\":\"owlpane.ndm.device\",\"value\":{\"stringValue\":\"$3\"}}"
+      fi
+      add_dp_attrs "$1" "$2" "$a"
+    }
+
+    # add_sensor_dp <value|status> <num> <device> <sensor-name> <sensor-type> <sensor-status>
+    add_sensor_dp() {
+      v="$2"
+      case "$v" in ''|*[!0-9.-]*) return 0 ;; esac
+      sn=$(json_safe "$4"); st=$(json_safe "$5"); ss=$(json_safe "$6")
+      printf '%s,' "{\"timeUnixNano\":\"$NOW\",\"asDouble\":$v,\"attributes\":[
+        {\"key\":\"owlpane.ndm.device\",\"value\":{\"stringValue\":\"$3\"}},
+        {\"key\":\"owlpane.ndm.sensor.name\",\"value\":{\"stringValue\":\"$sn\"}},
+        {\"key\":\"owlpane.ndm.sensor.type\",\"value\":{\"stringValue\":\"$st\"}},
+        {\"key\":\"owlpane.ndm.sensor.status\",\"value\":{\"stringValue\":\"$ss\"}}
+      ]}" >> "$STATE/dp_sensor_$1"
+    }
+
+    metric_name() {
+      case "$1" in
+        ping_rtt) echo owlpane.ping.rtt ;; ping_loss) echo owlpane.ping.loss ;;
+        in_bps) echo snmp.if.in_bps ;; out_bps) echo snmp.if.out_bps ;;
+        util) echo snmp.if.utilization_pct ;; err) echo snmp.if.errors ;;
+        dis) echo snmp.if.discards ;; status) echo snmp.if.status ;;
+        cpu) echo snmp.cpu.util ;; mem) echo snmp.memory.used_pct ;;
+        sensor_value) echo snmp.sensor.value ;; sensor_status) echo snmp.sensor.status ;;
+        bgp_state) echo snmp.bgp.peer.state ;; ospf_state) echo snmp.ospf.neighbor.state ;;
+      esac
+    }
+
+    flush_metrics() {
+      M=""
+      for m in ping_rtt ping_loss in_bps out_bps util err dis status cpu mem sensor_value sensor_status bgp_state ospf_state; do
+        f="$STATE/dp_$m"
+        [ -s "$f" ] || continue
+        dps=$(sed '$ s/,$//' "$f")
+        mn=$(metric_name "$m")
+        M="$M{\"name\":\"$mn\",\"gauge\":{\"dataPoints\":[$dps]}},"
+        : > "$f"
+      done
+      [ -n "$M" ] || return 0
+      curl -sfS -X POST "$BASE/v1/metrics" \        -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+        -d "{\"resourceMetrics\":[{\"resource\":{\"attributes\":[
+          {\"key\":\"service.name\",\"value\":{\"stringValue\":\"owlpane-ndm\"}},
+          {\"key\":\"k8s.cluster.name\",\"value\":{\"stringValue\":\"$CLUSTER\"}},
+          {\"key\":\"deployment.environment.name\",\"value\":{\"stringValue\":\"$ENVNAME\"}}
+        ]},\"scopeMetrics\":[{\"scope\":{\"name\":\"owlpane-ndm\"},\"metrics\":[${M%,}]}]}]}" \
+        || echo "ndm: metrics POST failed" >&2
+    }
+
+    inventory() { # name ip vendor model sysname up descr
+      nm=$(json_safe "$1"); ip=$(json_safe "$2"); ven=$(json_safe "$3"); mod=$(json_safe "$4")
+      sn=$(json_safe "$5"); up="$6"; desc=$(json_safe "$7")
+      printf '%s,' "{\"timeUnixNano\":\"$NOW\",\"severityText\":\"INFO\",\"body\":{\"stringValue\":\"ndm inventory\"},\"attributes\":[
+        {\"key\":\"owlpane.ndm.name\",\"value\":{\"stringValue\":\"$nm\"}},
+        {\"key\":\"owlpane.ndm.kind\",\"value\":{\"stringValue\":\"device\"}},
+        {\"key\":\"owlpane.ndm.vendor\",\"value\":{\"stringValue\":\"$ven\"}},
+        {\"key\":\"owlpane.ndm.model\",\"value\":{\"stringValue\":\"$mod\"}},
+        {\"key\":\"owlpane.ndm.ip\",\"value\":{\"stringValue\":\"$ip\"}},
+        {\"key\":\"owlpane.ndm.sysname\",\"value\":{\"stringValue\":\"$sn\"}},
+        {\"key\":\"owlpane.ndm.up\",\"value\":{\"stringValue\":\"$up\"}},
+        {\"key\":\"owlpane.ndm.descr\",\"value\":{\"stringValue\":\"$desc\"}}
+      ]}" >> "$STATE/logs"
+    }
+
+    neighbor() { # device protocol local_port remote_name remote_port remote_ip remote_platform
+      nm=$(json_safe "$1"); pr=$(json_safe "$2"); lp=$(json_safe "$3"); rn=$(json_safe "$4")
+      rp=$(json_safe "$5"); ri=$(json_safe "$6"); rpf=$(json_safe "$7")
+      printf '%s,' "{\"timeUnixNano\":\"$NOW\",\"severityText\":\"INFO\",\"body\":{\"stringValue\":\"ndm neighbor\"},\"attributes\":[
+        {\"key\":\"owlpane.ndm.name\",\"value\":{\"stringValue\":\"$nm\"}},
+        {\"key\":\"owlpane.ndm.kind\",\"value\":{\"stringValue\":\"neighbor\"}},
+        {\"key\":\"owlpane.ndm.protocol\",\"value\":{\"stringValue\":\"$pr\"}},
+        {\"key\":\"owlpane.ndm.local_port\",\"value\":{\"stringValue\":\"$lp\"}},
+        {\"key\":\"owlpane.ndm.remote_name\",\"value\":{\"stringValue\":\"$rn\"}},
+        {\"key\":\"owlpane.ndm.remote_port\",\"value\":{\"stringValue\":\"$rp\"}},
+        {\"key\":\"owlpane.ndm.remote_ip\",\"value\":{\"stringValue\":\"$ri\"}},
+        {\"key\":\"owlpane.ndm.remote_platform\",\"value\":{\"stringValue\":\"$rpf\"}}
+      ]}" >> "$STATE/logs"
+    }
+
+    flush_logs() {
+      [ -s "$STATE/logs" ] || return 0
+      recs=$(sed '$ s/,$//' "$STATE/logs")
+      : > "$STATE/logs"
+      curl -sfS -X POST "$BASE/v1/logs" \
+        -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+        -d "{\"resourceLogs\":[{\"resource\":{\"attributes\":[
+          {\"key\":\"service.name\",\"value\":{\"stringValue\":\"owlpane-ndm\"}},
+          {\"key\":\"k8s.cluster.name\",\"value\":{\"stringValue\":\"$CLUSTER\"}},
+          {\"key\":\"deployment.environment.name\",\"value\":{\"stringValue\":\"$ENVNAME\"}}
+        ]},\"scopeLogs\":[{\"scope\":{\"name\":\"owlpane-ndm\"},\"logRecords\":[$recs]}]}]}" \
+        || echo "ndm: logs POST failed" >&2
+    }
+
+    poll_interfaces() { # device-index device-name
+      i=$1; name=$2
+      : > "$STATE/w_name"; : > "$STATE/w_speed"; : > "$STATE/w_oper"; : > "$STATE/w_in"; : > "$STATE/w_out"
+      : > "$STATE/w_inerr"; : > "$STATE/w_outerr"; : > "$STATE/w_indis"; : > "$STATE/w_outdis"
+      walk "$i" 1.3.6.1.2.1.31.1.1.1.1  > "$STATE/w_name"    # ifName
+      walk "$i" 1.3.6.1.2.1.31.1.1.1.15 > "$STATE/w_speed"   # ifHighSpeed (Mbps)
+      walk "$i" 1.3.6.1.2.1.2.2.1.8     > "$STATE/w_oper"    # ifOperStatus
+      walk "$i" 1.3.6.1.2.1.31.1.1.1.6  > "$STATE/w_in"      # ifHCInOctets
+      walk "$i" 1.3.6.1.2.1.31.1.1.1.10 > "$STATE/w_out"     # ifHCOutOctets
+      walk "$i" 1.3.6.1.2.1.2.2.1.14    > "$STATE/w_inerr"
+      walk "$i" 1.3.6.1.2.1.2.2.1.20    > "$STATE/w_outerr"
+      walk "$i" 1.3.6.1.2.1.2.2.1.13    > "$STATE/w_indis"
+      walk "$i" 1.3.6.1.2.1.2.2.1.19    > "$STATE/w_outdis"
+      now_s=$(date +%s)
+      awk -F'\t' '
+        { f=FILENAME; sub(/.*\//,"",f); data[f SUBSEP $1]=$2; if (f=="w_name") keys[$1]=1 }
+        END { for (k in keys) printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", k, data["w_name",k],
+              data["w_speed",k]+0, data["w_oper",k]+0, data["w_in",k]+0, data["w_out",k]+0,
+              data["w_inerr",k]+0, data["w_outerr",k]+0, data["w_indis",k]+0, data["w_outdis",k]+0 }' \
+        "$STATE/w_name" "$STATE/w_speed" "$STATE/w_oper" "$STATE/w_in" "$STATE/w_out" \
+        "$STATE/w_inerr" "$STATE/w_outerr" "$STATE/w_indis" "$STATE/w_outdis" > "$STATE/ifs"
+      n=0
+      TAB=$(printf '\t')
+      while IFS="$TAB" read -r idx ifn speed oper cin cout cinerr couterr cindis coutdis; do
+        [ -n "$ifn" ] || continue
+        n=$((n + 1)); [ "$n" -gt "$MAXIF" ] && break
+        st=0; [ "$oper" = "1" ] && st=1
+        add_dp status "$st" "$name" "$ifn"
+        sf="$STATE/dev_${i}_if_${idx}"
+        if [ -f "$sf" ]; then
+          read -r pin pout pinerr pouterr pindis poutdis pts < "$sf"
+          dt=$((now_s - pts)); [ "$dt" -gt 0 ] || dt="$INTERVAL"
+          din=$((cin - pin)); dout=$((cout - pout))
+          if [ "$din" -ge 0 ] && [ "$dout" -ge 0 ]; then
+            inbps=$((din * 8 / dt)); outbps=$((dout * 8 / dt))
+            add_dp in_bps "$inbps" "$name" "$ifn"
+            add_dp out_bps "$outbps" "$name" "$ifn"
+            if [ "$speed" -gt 0 ] 2>/dev/null; then
+              maxb=$inbps; [ "$outbps" -gt "$maxb" ] && maxb=$outbps
+              util=$(awk "BEGIN{printf \"%.2f\", $maxb * 100 / ($speed * 1000000)}")
+              add_dp util "$util" "$name" "$ifn"
+            fi
+          fi
+          derr=$((cinerr - pinerr + couterr - pouterr)); [ "$derr" -ge 0 ] || derr=0
+          ddis=$((cindis - pindis + coutdis - poutdis)); [ "$ddis" -ge 0 ] || ddis=0
+          add_dp err "$derr" "$name" "$ifn"
+          add_dp dis "$ddis" "$name" "$ifn"
+        fi
+        printf '%s %s %s %s %s %s %s\n' "$cin" "$cout" "$cinerr" "$couterr" "$cindis" "$coutdis" "$now_s" > "$sf"
+      done < "$STATE/ifs"
+    }
+
+    # LLDP (1.0.8802.1.1.2) + CDP (1.3.6.1.4.1.9.9.23) neighbor tables -> owlpane.ndm.neighbor logs.
+    # Runs after poll_interfaces so $STATE/ifs (ifindex -> ifName) is available for CDP port names.
+    poll_neighbors() { # device-index device-name
+      i=$1; name=$2
+      # --- LLDP: remSysName index is timeMark.localPortNum.remIndex ---
+      walk_full "$i" 1.0.8802.1.1.2.1.4.1.1.9  > "$STATE/n_lldp_name"   # lldpRemSysName
+      walk_full "$i" 1.0.8802.1.1.2.1.4.1.1.7  > "$STATE/n_lldp_port"   # lldpRemPortId
+      walk_full "$i" 1.0.8802.1.1.2.1.4.1.1.10 > "$STATE/n_lldp_pdesc"  # lldpRemPortDesc
+      walk      "$i" 1.0.8802.1.1.2.1.3.7.1.3  > "$STATE/n_lldp_local"  # lldpLocPortId by portNum
+      if [ -s "$STATE/n_lldp_name" ]; then
+        awk -F'\t' '
+          { f=FILENAME; sub(/.*\//,"",f)
+            if (f=="n_lldp_local") { loc[$1]=$2; next }
+            split($1, p, "."); port=p[2]                       # timeMark.portNum.remIndex
+            k=port SUBSEP $1
+            if (f=="n_lldp_name") rn[k]=$2
+            else if (f=="n_lldp_port") rp[k]=$2
+            else if (f=="n_lldp_pdesc") rd[k]=$2
+            if (f!="n_lldp_local") seen[k]=port }
+          END { for (k in seen) { port=seen[k]
+                  printf "%s\t%s\t%s\t%s\n", loc[port], rn[k], (rp[k] != "" ? rp[k] : rd[k]), port } }' \
+          "$STATE/n_lldp_local" "$STATE/n_lldp_name" "$STATE/n_lldp_port" "$STATE/n_lldp_pdesc" > "$STATE/n_lldp"
+        TAB=$(printf '\t')
+        while IFS="$TAB" read -r lport rname rport _pn; do
+          [ -n "$rname" ] || continue
+          neighbor "$name" "lldp" "$lport" "$rname" "$rport" "" ""
+        done < "$STATE/n_lldp"
+      fi
+      # --- CDP: cdpCacheTable index is ifIndex.deviceIndex ---
+      walk_full "$i" 1.3.6.1.4.1.9.9.23.1.2.1.1.6 > "$STATE/n_cdp_id"    # cdpCacheDeviceId
+      walk_full "$i" 1.3.6.1.4.1.9.9.23.1.2.1.1.7 > "$STATE/n_cdp_port"  # cdpCacheDevicePort
+      walk_full "$i" 1.3.6.1.4.1.9.9.23.1.2.1.1.8 > "$STATE/n_cdp_plat"  # cdpCachePlatform
+      if [ -s "$STATE/n_cdp_id" ]; then
+        awk -F'\t' '
+          { f=FILENAME; sub(/.*\//,"",f)
+            split($1, p, "."); ifx=p[1]                        # ifIndex.deviceIndex
+            k=$1
+            if (f=="n_cdp_id") rn[k]=$2; else if (f=="n_cdp_port") rp[k]=$2; else pf[k]=$2
+            seen[k]=ifx }
+          END { for (k in seen) printf "%s\t%s\t%s\t%s\n", seen[k], rn[k], rp[k], pf[k] }' \
+          "$STATE/n_cdp_id" "$STATE/n_cdp_port" "$STATE/n_cdp_plat" > "$STATE/n_cdp"
+        TAB=$(printf '\t')
+        while IFS="$TAB" read -r ifx rname rport rplat; do
+          [ -n "$rname" ] || continue
+          lport=$(awk -F'\t' -v k="$ifx" '$1 == k { print $2; exit }' "$STATE/ifs" 2>/dev/null)
+          neighbor "$name" "cdp" "$lport" "$rname" "$rport" "" "$rplat"
+        done < "$STATE/n_cdp"
+      fi
+    }
+
+    # ENTITY-SENSOR-MIB (1.3.6.1.2.1.99.1.1.1) + ENTITY-MIB names -> snmp.sensor.* metrics.
+    # Covers temperature, fan rpm, voltage, watts and optics DOM (dBm) on Cisco/Juniper/Arista/etc.
+    poll_sensors() { # device-index device-name
+      i=$1; name=$2
+      walk "$i" 1.3.6.1.2.1.99.1.1.1.1 > "$STATE/s_type"   # entSensorType
+      [ -s "$STATE/s_type" ] || return 0
+      walk "$i" 1.3.6.1.2.1.99.1.1.1.3 > "$STATE/s_prec"   # entSensorPrecision
+      walk "$i" 1.3.6.1.2.1.99.1.1.1.4 > "$STATE/s_val"    # entSensorValue
+      walk "$i" 1.3.6.1.2.1.99.1.1.1.6 > "$STATE/s_stat"   # entSensorStatus 1=ok 2=unavailable 3=nonoperational
+      walk "$i" 1.3.6.1.2.1.47.1.1.1.1.7 > "$STATE/s_name" # entPhysicalName
+      awk -F'\t' '
+        { f=FILENAME; sub(/.*\//,"",f); d[f SUBSEP $1]=$2 }
+        END { for (k in d) { split(k, a, SUBSEP); if (a[1] != "s_type") continue
+                idx=a[2]; t=d["s_type",idx]+0
+                tn=(t==3?"voltsAC":t==4?"voltsDC":t==5?"amperes":t==6?"watts":t==7?"hertz":t==8?"celsius":t==9?"percentRH":t==10?"rpm":t==11?"cmm":t==14?"dBm":"other")
+                ss=d["s_stat",idx]+0
+                sn=(ss==1?"ok":ss==2?"unavailable":ss==3?"nonoperational":"unknown")
+                nm=d["s_name",idx]; if (nm=="") nm="sensor-" idx
+                prec=d["s_prec",idx]+0; val=d["s_val",idx]+0
+                if (prec>0) val=val/(10^prec)
+                printf "%s\t%s\t%s\t%.4g\t%s\n", nm, tn, sn, val, ss } }' \
+        "$STATE/s_type" "$STATE/s_prec" "$STATE/s_val" "$STATE/s_stat" "$STATE/s_name" > "$STATE/sensors"
+      TAB=$(printf '\t')
+      while IFS="$TAB" read -r sname stype sstatus sval sstat; do
+        [ -n "$sname" ] || continue
+        add_sensor_dp value "$sval" "$name" "$sname" "$stype" "$sstatus"
+        add_sensor_dp status "$sstat" "$name" "$sname" "$stype" "$sstatus"
+      done < "$STATE/sensors"
+    }
+
+    # BGP4-MIB peer states + OSPF-MIB neighbor states -> snmp.bgp.peer.state / snmp.ospf.neighbor.state.
+    # Indexes are composite (peer IP / neighbor IP + ifIndex), so these use walk_full.
+    poll_routing() { # device-index device-name
+      i=$1; name=$2
+      # BGP: bgpPeerState (1 idle … 6 established), bgpPeerRemoteAs — index is the peer IPv4.
+      walk_full "$i" 1.3.6.1.2.1.15.3.1.2 > "$STATE/bgp_state"
+      if [ -s "$STATE/bgp_state" ]; then
+        walk_full "$i" 1.3.6.1.2.1.15.3.1.9 > "$STATE/bgp_as"
+        TAB=$(printf '\t')
+        while IFS="$TAB" read -r peer st; do
+          [ -n "$peer" ] || continue
+          ras=$(awk -F'\t' -v k="$peer" '$1 == k { print $2; exit }' "$STATE/bgp_as" 2>/dev/null)
+          pj=$(json_safe "$peer"); aj=$(json_safe "$ras")
+          add_dp_attrs bgp_state "$st" "{\"key\":\"owlpane.ndm.device\",\"value\":{\"stringValue\":\"$name\"}},{\"key\":\"bgp.peer.ip\",\"value\":{\"stringValue\":\"$pj\"}},{\"key\":\"bgp.peer.remote_as\",\"value\":{\"stringValue\":\"$aj\"}}"
+          if [ "$st" != "6" ]; then
+            sn=$(json_safe "$name")
+            printf '%s,' "{\"timeUnixNano\":\"$NOW\",\"severityText\":\"WARN\",\"body\":{\"stringValue\":\"bgp peer not established\"},\"attributes\":[
+              {\"key\":\"owlpane.ndm.name\",\"value\":{\"stringValue\":\"$sn\"}},
+              {\"key\":\"owlpane.ndm.kind\",\"value\":{\"stringValue\":\"bgp-peer\"}},
+              {\"key\":\"bgp.peer.ip\",\"value\":{\"stringValue\":\"$pj\"}},
+              {\"key\":\"bgp.peer.remote_as\",\"value\":{\"stringValue\":\"$aj\"}},
+              {\"key\":\"bgp.peer.state\",\"value\":{\"stringValue\":\"$st\"}}
+            ]}" >> "$STATE/logs"
+          fi
+        done < "$STATE/bgp_state"
+      fi
+      # OSPF: ospfNbrState (1 down … 8 full) — index is neighbor IP + ifIndex.
+      walk_full "$i" 1.3.6.1.2.1.14.10.1.6 > "$STATE/ospf_state"
+      if [ -s "$STATE/ospf_state" ]; then
+        TAB=$(printf '\t')
+        while IFS="$TAB" read -r idx st; do
+          [ -n "$idx" ] || continue
+          nip=$(printf '%s' "$idx" | cut -d. -f1-4)
+          pj=$(json_safe "$nip")
+          add_dp_attrs ospf_state "$st" "{\"key\":\"owlpane.ndm.device\",\"value\":{\"stringValue\":\"$name\"}},{\"key\":\"ospf.neighbor.ip\",\"value\":{\"stringValue\":\"$pj\"}}"
+        done < "$STATE/ospf_state"
+      fi
+    }
+
+    poll_device() {
+      i=$1
+      name=$(getv "$i" NAME); host=$(getv "$i" HOST)
+      ping_dev "$host"
+      [ -n "$PING_RTT" ] && add_dp ping_rtt "$PING_RTT" "$name" ""
+      [ -n "$PING_LOSS" ] && add_dp ping_loss "$PING_LOSS" "$name" ""
+      sysname=$(get1 "$i" 1.3.6.1.2.1.1.5.0)
+      if [ -z "$sysname" ]; then
+        inventory "$name" "$host" "" "" "" "false" ""
+        echo "ndm: $name ($host) did not answer SNMP — check credentials/reachability" >&2
+        return 0
+      fi
+      descr=$(get1 "$i" 1.3.6.1.2.1.1.1.0)
+      soid=$(get1 "$i" 1.3.6.1.2.1.1.2.0)
+      vendor=$(vendor_of "$soid")
+      model=$(printf '%s' "$soid" | sed 's/^\.//' | awk -F. '{print $(NF-1) "." $NF}')
+      poll_interfaces "$i" "$name"
+      cpu=""
+      for oid in 1.3.6.1.4.1.9.9.109.1.1.1.1.8 1.3.6.1.4.1.2636.3.1.13.1.8 1.3.6.1.2.1.25.3.3.1.2; do
+        cpu=$(walk "$i" "$oid" | awk -F'\t' '{s+=$2; n++} END{if (n>0) printf "%.1f", s/n}')
+        [ -n "$cpu" ] && break
+      done
+      [ -z "$cpu" ] && cpu=$(get1 "$i" 1.3.6.1.4.1.12356.101.4.1.3.0)
+      [ -n "$cpu" ] && add_dp cpu "$cpu" "$name" ""
+      mem=$(get1 "$i" 1.3.6.1.4.1.12356.101.4.1.4.0)
+      if [ -z "$mem" ]; then
+        u=$(get1 "$i" 1.3.6.1.4.1.9.9.48.1.1.1.5.1); fr=$(get1 "$i" 1.3.6.1.4.1.9.9.48.1.1.1.6.1)
+        case "$u$fr" in ''|*[!0-9]*) : ;; *) mem=$(awk "BEGIN{printf \"%.1f\", $u * 100 / ($u + $fr)}") ;; esac
+      fi
+      [ -z "$mem" ] && mem=$(walk "$i" 1.3.6.1.4.1.2636.3.1.13.1.11 | awk -F'\t' '{s+=$2; n++} END{if (n>0) printf "%.1f", s/n}')
+      [ -n "$mem" ] && add_dp mem "$mem" "$name" ""
+      poll_neighbors "$i" "$name"
+      poll_sensors "$i" "$name"
+      poll_routing "$i" "$name"
+      inventory "$name" "$host" "$vendor" "$model" "$sysname" "true" "$descr"
+    }
+
+    while true; do
+      NOW=$(nano)
+      i=1
+      while :; do
+        nm=$(getv "$i" NAME)
+        [ -n "$nm" ] || break
+        poll_device "$i"
+        i=$((i + 1)); [ "$i" -gt 64 ] && break
+      done
+      flush_metrics
+      flush_logs
+      sleep "$INTERVAL"
+    done
+{{- if .Values.ndm.discovery.enabled }}
+  discover-subnet.sh: |
+    #!/bin/sh
+    # Opt-in subnet discovery: ping-sweep a CIDR (rate-limited), probe SNMP sysName on
+    # responders, and report owlpane.ndm.discovered + one owlpane.ndm.discovery.run audit
+    # record per run. Never stores credentials; the community comes from a Secret env var.
+    set -u
+    CLUSTER="{{ .Values.cluster.name }}"
+    ENVNAME="{{ .Values.environment }}"
+    BASE="{{ .Values.endpoint | trimSuffix "/" }}"
+    INTERVAL="{{ .Values.ndm.discovery.intervalSeconds }}"
+    CIDR="{{ .Values.ndm.discovery.cidr }}"
+    RATE="{{ .Values.ndm.discovery.ratePerSecond }}"
+    KEY="${OWLPANE_INGEST_KEY:?missing ingest key}"
+    COMMUNITY="${NDM_DISCOVERY_COMMUNITY:?missing discovery community}"
+    STATE=/tmp/ndm-discovery
+    mkdir -p "$STATE"
+
+    nano() { echo "$(date +%s)000000000"; }
+    json_safe() { printf '%s' "$1" | tr -d '\\"' | tr -d '[:cntrl:]' | cut -c1-200; }
+    vendor_of() {
+      ent=$(printf '%s' "$1" | sed 's/^\.//' | awk -F. '{print $7}')
+      case "$ent" in
+        9) echo cisco ;; 2636) echo juniper ;; 12356) echo fortinet ;; 30065) echo arista ;;
+        8072) echo net-snmp ;; 2011) echo huawei ;; 25506) echo hpe ;; 11) echo hp ;;
+        14988) echo mikrotik ;; 41112) echo ubiquiti ;; 9[0-9]*) echo cisco ;;
+        *) echo "" ;;
+      esac
+    }
+
+    # expand_cidr a.b.c.d/p -> one host IP per line (network/broadcast skipped, cap 1024)
+    expand_cidr() {
+      printf '%s' "$1" | awk -F'[/.]' '
+        { p=$NF; ip=$1*16777216+$2*65536+$3*256+$4
+          bits=32-p; count=2^bits
+          step=1; start=1; finish=count-1
+          if (p>=31) { start=0; finish=count }
+          base=int(ip/2^bits)*2^bits
+          for (x=start; x<finish; x++) { h=base+x
+            printf "%d.%d.%d.%d\n", int(h/16777216)%256, int(h/65536)%256, int(h/256)%256, h%256 } }'
+    }
+
+    discovered() { # ip sysname vendor snmp_ok
+      ip=$(json_safe "$1"); sn=$(json_safe "$2"); ven=$(json_safe "$3"); ok="$4"
+      printf '%s,' "{\"timeUnixNano\":\"$NOW\",\"severityText\":\"INFO\",\"body\":{\"stringValue\":\"ndm discovered host\"},\"attributes\":[
+        {\"key\":\"owlpane.ndm.kind\",\"value\":{\"stringValue\":\"discovered\"}},
+        {\"key\":\"owlpane.ndm.ip\",\"value\":{\"stringValue\":\"$ip\"}},
+        {\"key\":\"owlpane.ndm.sysname\",\"value\":{\"stringValue\":\"$sn\"}},
+        {\"key\":\"owlpane.ndm.vendor\",\"value\":{\"stringValue\":\"$ven\"}},
+        {\"key\":\"owlpane.ndm.snmp\",\"value\":{\"stringValue\":\"$ok\"}}
+      ]}" >> "$STATE/logs"
+    }
+
+    audit_run() { # hosts up snmp_ok duration_s
+      c=$(json_safe "$CIDR")
+      printf '%s,' "{\"timeUnixNano\":\"$NOW\",\"severityText\":\"INFO\",\"body\":{\"stringValue\":\"ndm discovery run\"},\"attributes\":[
+        {\"key\":\"owlpane.ndm.kind\",\"value\":{\"stringValue\":\"discovery-run\"}},
+        {\"key\":\"owlpane.ndm.cidr\",\"value\":{\"stringValue\":\"$c\"}},
+        {\"key\":\"owlpane.ndm.hosts\",\"value\":{\"stringValue\":\"$1\"}},
+        {\"key\":\"owlpane.ndm.up\",\"value\":{\"stringValue\":\"$2\"}},
+        {\"key\":\"owlpane.ndm.snmp_ok\",\"value\":{\"stringValue\":\"$3\"}},
+        {\"key\":\"owlpane.ndm.duration_s\",\"value\":{\"stringValue\":\"$4\"}}
+      ]}" >> "$STATE/logs"
+    }
+
+    flush_logs() {
+      [ -s "$STATE/logs" ] || return 0
+      recs=$(sed '$ s/,$//' "$STATE/logs")
+      : > "$STATE/logs"
+      curl -sfS -X POST "$BASE/v1/logs" \
+        -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+        -d "{\"resourceLogs\":[{\"resource\":{\"attributes\":[
+          {\"key\":\"service.name\",\"value\":{\"stringValue\":\"owlpane-ndm\"}},
+          {\"key\":\"k8s.cluster.name\",\"value\":{\"stringValue\":\"$CLUSTER\"}},
+          {\"key\":\"deployment.environment.name\",\"value\":{\"stringValue\":\"$ENVNAME\"}}
+        ]},\"scopeLogs\":[{\"scope\":{\"name\":\"owlpane-ndm\"},\"logRecords\":[$recs]}]}]}" \
+        || echo "ndm-discovery: logs POST failed" >&2
+    }
+
+    delay=$(awk "BEGIN{printf \"%.3f\", 1 / $RATE}")
+    while true; do
+      NOW=$(nano)
+      t0=$(date +%s)
+      hosts=0; up=0; snmpok=0
+      expand_cidr "$CIDR" > "$STATE/hosts"
+      while read -r ip; do
+        hosts=$((hosts + 1)); [ "$hosts" -gt 1024 ] && break
+        if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
+          up=$((up + 1))
+          sn=$(snmpget -v2c -c "$COMMUNITY" -Onqv -t 2 -r 1 "$ip" 1.3.6.1.2.1.1.5.0 2>/dev/null | tr -d '"' | head -1)
+          if [ -n "$sn" ]; then
+            snmpok=$((snmpok + 1))
+            soid=$(snmpget -v2c -c "$COMMUNITY" -Onqv -t 2 -r 1 "$ip" 1.3.6.1.2.1.1.2.0 2>/dev/null | tr -d '"' | head -1)
+            discovered "$ip" "$sn" "$(vendor_of "$soid")" "true"
+          else
+            discovered "$ip" "" "" "false"
+          fi
+        fi
+        sleep "$delay"
+      done < "$STATE/hosts"
+      audit_run "$hosts" "$up" "$snmpok" "$(( $(date +%s) - t0 ))"
+      flush_logs
+      echo "ndm-discovery: $CIDR scanned=$hosts up=$up snmp=$snmpok" >&2
+      sleep "$INTERVAL"
+    done
+{{- end }}
+{{- if .Values.ndm.configBackup.enabled }}
+  backup-config.sh: |
+    #!/bin/sh
+    # Auvik-style config backup: SSH "show running-config" per device, redact credentials,
+    # and post the config as a versioned owlpane.ndm.config log only when its hash changes.
+    set -u
+    CLUSTER="{{ .Values.cluster.name }}"
+    ENVNAME="{{ .Values.environment }}"
+    BASE="{{ .Values.endpoint | trimSuffix "/" }}"
+    INTERVAL="{{ .Values.ndm.configBackup.intervalSeconds }}"
+    KEY="${OWLPANE_INGEST_KEY:?missing ingest key}"
+    STATE=/tmp/ndm-config
+    mkdir -p "$STATE"
+
+    nano() { echo "$(date +%s)000000000"; }
+    getv() { v="NDM_DEV_${1}_${2}"; eval "printf '%s' \"\${$v:-}\""; }
+    json_safe() { printf '%s' "$1" | tr -d '\\"' | tr -d '[:cntrl:]' | cut -c1-200; }
+
+    # Best-effort credential redaction (Cisco/Juniper/Arista/Fortinet idioms). The raw config
+    # never leaves the cluster; only this redacted text is posted.
+    redact() {
+      sed -e 's/\(password [0-9] \)[^ ]*/\1***/' \
+          -e 's/\(secret [0-9] \)[^ ]*/\1***/' \
+          -e 's/\(snmp-server community \)[^ ]*/\1***/' \
+          -e 's/\(key-string \)[^ ]*/\1***/' \
+          -e 's/\(message-digest-key [0-9]* md5 \)[^ ]*/\1***/' \
+          -e 's/\(pre-shared-key [^ ]* \)[^ ]*/\1***/' \
+          -e 's/\(radius-server host [^ ]* key \)[^ ]*/\1***/' \
+          -e 's/\(tacacs-server key \)[^ ]*/\1***/' \
+          -e 's/\(set community \)[^ ]*/\1***/'
+    }
+
+    # json_body: escape a multi-line config into one JSON string (backslash, quote, newlines).
+    json_body() { awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); printf "%s\\n", $0 }' | cut -c1-200000; }
+
+    backup_one() { # device-index
+      i=$1
+      name=$(getv "$i" NAME); host=$(getv "$i" HOST)
+      user=$(getv "$i" SSHUSER); pass=$(getv "$i" SSHPASS)
+      cmd=$(getv "$i" CONFIGCMD); [ -n "$cmd" ] || cmd="show running-config"
+      out="$STATE/cfg_$i"; prev="$STATE/hash_$i"
+      if ! sshpass -p "$pass" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+           -o ConnectTimeout=5 -o NumberOfPasswordPrompts=1 "$user@$host" "$cmd" > "$out" 2>/dev/null; then
+        echo "ndm-config: $name ($host) ssh failed" >&2
+        return 0
+      fi
+      [ -s "$out" ] || { echo "ndm-config: $name ($host) returned empty config" >&2; return 0; }
+      hash=$(redact < "$out" | cksum | awk '{print $1"-"$2}')
+      [ -f "$prev" ] && [ "$(cat "$prev")" = "$hash" ] && return 0   # unchanged — no new version
+      echo "$hash" > "$prev"
+      nm=$(json_safe "$name"); sz=$(redact < "$out" | wc -c | tr -d ' ')
+      body=$(redact < "$out" | json_body)
+      printf '%s,' "{\"timeUnixNano\":\"$(nano)\",\"severityText\":\"INFO\",\"body\":{\"stringValue\":\"$body\"},\"attributes\":[
+        {\"key\":\"owlpane.ndm.name\",\"value\":{\"stringValue\":\"$nm\"}},
+        {\"key\":\"owlpane.ndm.kind\",\"value\":{\"stringValue\":\"config\"}},
+        {\"key\":\"owlpane.ndm.config.version\",\"value\":{\"stringValue\":\"$hash\"}},
+        {\"key\":\"owlpane.ndm.config.bytes\",\"value\":{\"stringValue\":\"$sz\"}}
+      ]}" >> "$STATE/logs"
+      echo "ndm-config: $name config version $hash ($sz bytes)" >&2
+    }
+
+    flush_logs() {
+      [ -s "$STATE/logs" ] || return 0
+      recs=$(sed '$ s/,$//' "$STATE/logs")
+      : > "$STATE/logs"
+      curl -sfS -X POST "$BASE/v1/logs" \
+        -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+        -d "{\"resourceLogs\":[{\"resource\":{\"attributes\":[
+          {\"key\":\"service.name\",\"value\":{\"stringValue\":\"owlpane-ndm\"}},
+          {\"key\":\"k8s.cluster.name\",\"value\":{\"stringValue\":\"$CLUSTER\"}},
+          {\"key\":\"deployment.environment.name\",\"value\":{\"stringValue\":\"$ENVNAME\"}}
+        ]},\"scopeLogs\":[{\"scope\":{\"name\":\"owlpane-ndm\"},\"logRecords\":[$recs]}]}]}" \
+        || echo "ndm-config: logs POST failed" >&2
+    }
+
+    while true; do
+      i=1
+      while :; do
+        nm=$(getv "$i" NAME)
+        [ -n "$nm" ] || break
+        [ -n "$(getv "$i" SSHUSER)" ] && backup_one "$i"
+        i=$((i + 1)); [ "$i" -gt 64 ] && break
+      done
+      flush_logs
+      sleep "$INTERVAL"
+    done
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: owlpane-ndm
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: {{ include "owlpane.appName" . }}, app.kubernetes.io/component: ndm }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "owlpane.appName" . }}
+        app.kubernetes.io/component: ndm
+    spec:
+      serviceAccountName: {{ include "owlpane.sa" . }}
+      automountServiceAccountToken: false
+      containers:
+        - name: ndm
+          image: "{{ .Values.ndm.image.repository }}:{{ .Values.ndm.image.tag }}"
+          imagePullPolicy: {{ .Values.ndm.image.pullPolicy }}
+          command: ["/bin/sh", "/scripts/poll-devices.sh"]
+          env:
+            - name: OWLPANE_INGEST_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ingestKeySecret.name }}
+                  key: {{ .Values.ingestKeySecret.key }}
+            {{- range $i, $d := .Values.ndm.devices }}
+            {{- $n := add $i 1 }}
+            - name: NDM_DEV_{{ $n }}_NAME
+              value: {{ $d.name | quote }}
+            - name: NDM_DEV_{{ $n }}_HOST
+              value: {{ $d.host | quote }}
+            - name: NDM_DEV_{{ $n }}_VERSION
+              value: {{ default "v2c" $d.version | quote }}
+            {{- if eq (default "v2c" $d.version) "v3" }}
+            - name: NDM_DEV_{{ $n }}_USER
+              valueFrom: { secretKeyRef: { name: {{ $d.v3.userSecret.name | quote }}, key: {{ $d.v3.userSecret.key | quote }} } }
+            {{- with $d.v3.authKeySecret }}
+            - name: NDM_DEV_{{ $n }}_AUTHPROTO
+              value: {{ default "SHA" $d.v3.authProtocol | quote }}
+            - name: NDM_DEV_{{ $n }}_AUTHKEY
+              valueFrom: { secretKeyRef: { name: {{ .name | quote }}, key: {{ .key | quote }} } }
+            {{- end }}
+            {{- with $d.v3.privKeySecret }}
+            - name: NDM_DEV_{{ $n }}_PRIVPROTO
+              value: {{ default "AES" $d.v3.privProtocol | quote }}
+            - name: NDM_DEV_{{ $n }}_PRIVKEY
+              valueFrom: { secretKeyRef: { name: {{ .name | quote }}, key: {{ .key | quote }} } }
+            {{- end }}
+            {{- else }}
+            - name: NDM_DEV_{{ $n }}_COMMUNITY
+              valueFrom: { secretKeyRef: { name: {{ $d.communitySecret.name | quote }}, key: {{ $d.communitySecret.key | quote }} } }
+            {{- end }}
+            {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL], add: [NET_RAW] }  # NET_RAW for ICMP ping only
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          resources: {{- toYaml .Values.ndm.resources | nindent 12 }}
+        {{- if .Values.ndm.discovery.enabled }}
+        - name: ndm-discovery
+          image: "{{ .Values.ndm.image.repository }}:{{ .Values.ndm.image.tag }}"
+          imagePullPolicy: {{ .Values.ndm.image.pullPolicy }}
+          command: ["/bin/sh", "/scripts/discover-subnet.sh"]
+          env:
+            - name: OWLPANE_INGEST_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ingestKeySecret.name }}
+                  key: {{ .Values.ingestKeySecret.key }}
+            - name: NDM_DISCOVERY_COMMUNITY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ndm.discovery.communitySecret.name | quote }}
+                  key: {{ .Values.ndm.discovery.communitySecret.key | quote }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL], add: [NET_RAW] }  # NET_RAW for ICMP ping only
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          resources: {{- toYaml .Values.ndm.discovery.resources | nindent 12 }}
+        {{- end }}
+        {{- if .Values.ndm.configBackup.enabled }}
+        - name: ndm-config
+          image: "{{ .Values.ndm.image.repository }}:{{ .Values.ndm.image.tag }}"
+          imagePullPolicy: {{ .Values.ndm.image.pullPolicy }}
+          command: ["/bin/sh", "/scripts/backup-config.sh"]
+          env:
+            - name: OWLPANE_INGEST_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ingestKeySecret.name }}
+                  key: {{ .Values.ingestKeySecret.key }}
+            {{- range $i, $d := .Values.ndm.devices }}
+            {{- with $d.configBackup }}
+            {{- $n := add $i 1 }}
+            - name: NDM_DEV_{{ $n }}_NAME
+              value: {{ $d.name | quote }}
+            - name: NDM_DEV_{{ $n }}_HOST
+              value: {{ $d.host | quote }}
+            - name: NDM_DEV_{{ $n }}_CONFIGCMD
+              value: {{ default "show running-config" .command | quote }}
+            - name: NDM_DEV_{{ $n }}_SSHUSER
+              valueFrom: { secretKeyRef: { name: {{ .sshSecret.name | quote }}, key: {{ .sshSecret.userKey | quote }} } }
+            - name: NDM_DEV_{{ $n }}_SSHPASS
+              valueFrom: { secretKeyRef: { name: {{ .sshSecret.name | quote }}, key: {{ .sshSecret.passwordKey | quote }} } }
+            {{- end }}
+            {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }  # outbound SSH only — no capabilities at all
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          resources: {{- toYaml .Values.ndm.configBackup.resources | nindent 12 }}
+        {{- end }}
+      volumes:
+        - name: scripts
+          configMap: { name: owlpane-ndm, defaultMode: 0555 }
+        - name: tmp
+          emptyDir: { sizeLimit: 32Mi }
+{{- end }}

@@ -29,36 +29,56 @@ data:
       k8s_objects:
         auth_type: serviceAccount
         objects:
+          # Never replay history for events on a restart — only nodes/workloads/etc. below need the
+          # one-time inventory snapshot.
           - { name: events, mode: watch, group: events.k8s.io }
           {{- if .Values.clusterCollector.objectSnapshots }}
-          - { name: services, mode: watch, group: "" }
-          - { name: ingresses, mode: watch, group: networking.k8s.io }
-          - { name: deployments, mode: watch, group: apps }
-          - { name: statefulsets, mode: watch, group: apps }
-          - { name: daemonsets, mode: watch, group: apps }
+          # Full Node objects: role, taints, labels, addresses, kubelet/runtime/OS versions, cached
+          # images, capacity/allocatable. The k8s_cluster receiver's node metrics don't carry this;
+          # the console's node detail page reads it from this watch (kubernetes.service.ts nodeDetail).
+          #
+          # mode: pull, not watch: this collector's k8sobjectsreceiver (0.161.0) predates
+          # include_initial_state, so plain "watch" only emits an object on its NEXT change — a Service,
+          # PVC or Node that never changes again after the collector starts would never appear at all.
+          # A 5-minute full re-list keeps these current without depending on the object ever changing.
+          - { name: nodes, mode: pull, group: "", interval: 5m }
+          - { name: services, mode: pull, group: "", interval: 5m }
+          - { name: ingresses, mode: pull, group: networking.k8s.io, interval: 5m }
+          - { name: deployments, mode: pull, group: apps, interval: 5m }
+          - { name: statefulsets, mode: pull, group: apps, interval: 5m }
+          - { name: daemonsets, mode: pull, group: apps, interval: 5m }
+          - { name: jobs, mode: pull, group: batch, interval: 5m }
+          - { name: cronjobs, mode: pull, group: batch, interval: 5m }
+          - { name: persistentvolumeclaims, mode: pull, group: "", interval: 5m }
+          - { name: persistentvolumes, mode: pull, group: "", interval: 5m }
+          - { name: configmaps, mode: pull, group: "", interval: 5m }
+          - { name: storageclasses, mode: pull, group: storage.k8s.io, interval: 5m }
+          - { name: poddisruptionbudgets, mode: pull, group: policy, interval: 5m }
           {{- if .Values.clusterCollector.watchPods }}
+          # Pods churn constantly (restarts, reschedules) so watch's "next change only" gap self-heals
+          # in seconds; kept on watch rather than pull to avoid a full-cluster pod LIST every interval.
           - { name: pods, mode: watch, group: "" }
           {{- end }}
           {{- if .Values.clusterCollector.watchCertManager }}
-          - { name: certificates, mode: watch, group: cert-manager.io }
+          - { name: certificates, mode: pull, group: cert-manager.io, interval: 5m }
           {{- end }}
           {{- if .Values.clusterCollector.watchGatewayApi }}
-          - { name: gateways, mode: watch, group: gateway.networking.k8s.io }
-          - { name: httproutes, mode: watch, group: gateway.networking.k8s.io }
+          - { name: gateways, mode: pull, group: gateway.networking.k8s.io, interval: 5m }
+          - { name: httproutes, mode: pull, group: gateway.networking.k8s.io, interval: 5m }
           {{- end }}
           {{- if .Values.clusterCollector.watchSecurityPosture }}
-          - { name: namespaces, mode: watch, group: "" }
-          - { name: limitranges, mode: watch, group: "" }
-          - { name: resourcequotas, mode: watch, group: "" }
-          - { name: networkpolicies, mode: watch, group: networking.k8s.io }
-          - { name: roles, mode: watch, group: rbac.authorization.k8s.io }
-          - { name: rolebindings, mode: watch, group: rbac.authorization.k8s.io }
-          - { name: clusterroles, mode: watch, group: rbac.authorization.k8s.io }
-          - { name: clusterrolebindings, mode: watch, group: rbac.authorization.k8s.io }
+          - { name: namespaces, mode: pull, group: "", interval: 5m }
+          - { name: limitranges, mode: pull, group: "", interval: 5m }
+          - { name: resourcequotas, mode: pull, group: "", interval: 5m }
+          - { name: networkpolicies, mode: pull, group: networking.k8s.io, interval: 5m }
+          - { name: roles, mode: pull, group: rbac.authorization.k8s.io, interval: 5m }
+          - { name: rolebindings, mode: pull, group: rbac.authorization.k8s.io, interval: 5m }
+          - { name: clusterroles, mode: pull, group: rbac.authorization.k8s.io, interval: 5m }
+          - { name: clusterrolebindings, mode: pull, group: rbac.authorization.k8s.io, interval: 5m }
           {{- end }}
           {{- if and .Values.clusterCollector.watchSecurityPosture .Values.securityIntegrations.policyReports.enabled }}
-          - { name: policyreports, mode: watch, group: wgpolicyk8s.io }
-          - { name: clusterpolicyreports, mode: watch, group: wgpolicyk8s.io }
+          - { name: policyreports, mode: pull, group: wgpolicyk8s.io, interval: 5m }
+          - { name: clusterpolicyreports, mode: pull, group: wgpolicyk8s.io, interval: 5m }
           {{- end }}
           {{- end }}
       {{- end }}

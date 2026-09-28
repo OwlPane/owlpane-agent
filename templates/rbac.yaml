@@ -9,8 +9,9 @@ metadata:
 {{- end }}
 {{- if .Values.rbac.create }}
 ---
-# Read-only. Deliberately NOT granted: secrets, configmaps, pods/exec, pods/log, any write verb, or
-# any resource beyond what is listed. test-rbac.sh enforces this on every change.
+# Read-only. Deliberately NOT granted: secrets, pods/exec, pods/log, any write verb, or
+# any resource beyond what is listed. ConfigMaps are metadata for the cluster explorer.
+# test-rbac.sh enforces this on every change. Ops verbs live in rbac-ops.yaml and stay off unless ops.enabled.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -18,7 +19,7 @@ metadata:
   labels: {{- include "owlpane.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [nodes, nodes/stats, nodes/proxy, namespaces, pods, services, endpoints, replicationcontrollers, resourcequotas, persistentvolumeclaims, events, limitranges]
+    resources: [nodes, nodes/stats, nodes/proxy, namespaces, pods, services, endpoints, replicationcontrollers, resourcequotas, persistentvolumeclaims, persistentvolumes, configmaps, events, limitranges]
     verbs: [get, list, watch]
   - apiGroups: [networking.k8s.io]
     resources: [ingresses, networkpolicies]
@@ -43,6 +44,12 @@ rules:
     verbs: [get, list, watch]
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
     verbs: [get, list, watch]
   - apiGroups: [events.k8s.io]
     resources: [events]

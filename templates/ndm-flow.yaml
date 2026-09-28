@@ -1,0 +1,79 @@
+{{- if .Values.ndm.flow.enabled }}
+{{- include "owlpane.require" . }}
+# NetFlow v5/v9 + IPFIX receiver. Devices export flows to this Service; conversations are
+# aggregated in memory and posted as owlpane.ndm.flow.* logs every intervalSeconds.
+apiVersion: v1
+kind: Service
+metadata:
+  name: owlpane-ndm-flow
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.ndm.flow.serviceType }}
+  selector:
+    app.kubernetes.io/name: {{ include "owlpane.appName" . }}
+    app.kubernetes.io/component: ndm-flow
+  ports:
+    - name: netflow
+      protocol: UDP
+      port: {{ .Values.ndm.flow.port }}
+      targetPort: netflow
+      {{- if and (eq .Values.ndm.flow.serviceType "NodePort") .Values.ndm.flow.nodePort }}
+      nodePort: {{ .Values.ndm.flow.nodePort }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: owlpane-ndm-flow
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: {{ include "owlpane.appName" . }}, app.kubernetes.io/component: ndm-flow }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "owlpane.appName" . }}
+        app.kubernetes.io/component: ndm-flow
+    spec:
+      serviceAccountName: {{ include "owlpane.sa" . }}
+      automountServiceAccountToken: false
+      containers:
+        - name: flow
+          image: "{{ .Values.ndm.flow.image.repository }}:{{ .Values.ndm.flow.image.tag }}"
+          imagePullPolicy: {{ .Values.ndm.flow.image.pullPolicy }}
+          env:
+            - name: OWLPANE_INGEST_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ingestKeySecret.name }}
+                  key: {{ .Values.ingestKeySecret.key }}
+            - name: ENDPOINT
+              value: {{ .Values.endpoint | quote }}
+            - name: CLUSTER
+              value: {{ .Values.cluster.name | quote }}
+            - name: ENVNAME
+              value: {{ .Values.environment | quote }}
+            - name: FLOW_PORT
+              value: {{ .Values.ndm.flow.port | quote }}
+            - name: FLOW_INTERVAL
+              value: {{ .Values.ndm.flow.intervalSeconds | quote }}
+            {{- range $i, $d := .Values.ndm.devices }}
+            {{- $n := add $i 1 }}
+            - name: NDM_DEV_{{ $n }}_NAME
+              value: {{ $d.name | quote }}
+            - name: NDM_DEV_{{ $n }}_HOST
+              value: {{ $d.host | quote }}
+            {{- end }}
+          ports:
+            - { name: netflow, containerPort: {{ .Values.ndm.flow.port }}, protocol: UDP }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }  # UDP receive only — no capabilities at all
+          resources: {{- toYaml .Values.ndm.flow.resources | nindent 12 }}
+{{- end }}

@@ -1,7 +1,7 @@
 # Recommended owlpane-agent settings when you install owlpane-demo-workloads.
 # Usage:
-#   helm upgrade --install owlpane-agent ./deploy/helm/owlpane-agent -n owlpane \
-#     -f deploy/helm/owlpane-agent/values-demo-workloads.yaml \
+#   helm upgrade --install owlpane-agent oci://ghcr.io/balaji-singh/owlpane-agent -n owlpane \
+#     -f values-demo-workloads.yaml \
 #     --set endpoint=... --set cluster.name=...
 #
 # North-south Paths need Ingress object snapshots; Network policy hints need watchSecurityPosture.

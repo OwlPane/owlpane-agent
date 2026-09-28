@@ -9,3 +9,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: helm lint . --set endpoint=https://ingest.example.com --set cluster.name=t
+      - run: ./scripts/test-rbac.sh
+      - run: ./scripts/test-footprint.sh
+      - run: ./scripts/test-ndm.sh
