@@ -18,6 +18,28 @@ data:
         endpoint: "https://${env:K8S_NODE_NAME}:10250"
         insecure_skip_verify: {{ .Values.nodeAgent.kubeletInsecureSkipVerify }}
         metric_groups: [node, pod, container, volume]
+      {{- if .Values.nodeAgent.hostmetrics.enabled }}
+      hostmetrics:
+        collection_interval: {{ .Values.nodeAgent.collectionInterval }}
+        root_path: /hostfs
+        scrapers:
+          cpu:
+          memory:
+          disk:
+          load:
+          network:
+          filesystem:
+      {{- end }}
+      {{- if .Values.carbon.kepler.enabled }}
+      # Scrape this node's own Kepler (host-network DaemonSet) for measured node power.
+      prometheus/kepler:
+        config:
+          scrape_configs:
+            - job_name: kepler
+              scrape_interval: {{ .Values.nodeAgent.collectionInterval }}
+              static_configs:
+                - targets: ["${env:K8S_NODE_IP}:{{ .Values.carbon.kepler.port }}"]
+      {{- end }}
       {{- if .Values.logs.enabled }}
       filelog:
         include: [/var/log/pods/*/*/*.log]
@@ -31,12 +53,29 @@ data:
       {{- end }}
     processors:
       memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
+      {{- if .Values.nodeAgent.resourcedetection.enabled }}
+      # env first so OTEL_RESOURCE_ATTRIBUTES wins (manual override for on-prem); then cloud detectors.
+      resourcedetection:
+        detectors: [env, gcp, ec2, azure]
+        timeout: 5s
+        override: false
+      {{- end }}
       {{- include "owlpane.k8sattributes" . | nindent 6 }}
       resource:
         attributes:
           - { key: k8s.cluster.name, value: {{ .Values.cluster.name | quote }}, action: upsert }
           - { key: service.name, value: "kubernetes-node", action: insert }
           - { key: deployment.environment.name, value: {{ .Values.environment | quote }}, action: insert }
+      {{- if .Values.carbon.kepler.enabled }}
+      # Kepler metrics get the node identity here, not via OTEL_RESOURCE_ATTRIBUTES, so app OTLP
+      # passing through the node agent is never mis-tagged as node telemetry.
+      resource/kepler:
+        attributes:
+          - { key: k8s.cluster.name, value: {{ .Values.cluster.name | quote }}, action: upsert }
+          - { key: k8s.node.name, value: ${env:K8S_NODE_NAME}, action: upsert }
+          - { key: service.name, value: "kepler", action: upsert }
+          - { key: deployment.environment.name, value: {{ .Values.environment | quote }}, action: insert }
+      {{- end }}
       # Never forward what identifies a person or carries a credential.
       attributes/scrub:
         actions:
@@ -60,9 +99,15 @@ data:
       telemetry: { metrics: { level: none } }
       pipelines:
         metrics:
-          receivers: [otlp, kubelet_stats]
-          processors: [memory_limiter, k8s_attributes, resource, batch]
+          receivers: [otlp, kubelet_stats{{ if .Values.nodeAgent.hostmetrics.enabled }}, hostmetrics{{ end }}]
+          processors: [memory_limiter{{ if .Values.nodeAgent.resourcedetection.enabled }}, resourcedetection{{ end }}, k8s_attributes, resource, batch]
           exporters: [otlp_http]
+        {{- if .Values.carbon.kepler.enabled }}
+        metrics/kepler:
+          receivers: [prometheus/kepler]
+          processors: [memory_limiter, resource/kepler, batch]
+          exporters: [otlp_http]
+        {{- end }}
         {{- if .Values.redaction.enabled }}
         metrics/redaction:
           receivers: [count]

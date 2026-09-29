@@ -1,0 +1,27 @@
+# Standalone Owlpane collector for a VM or Docker host (no Kubernetes API).
+# helm install owlpane oci://ghcr.io/balaji-singh/owlpane-agent -f values-standalone.yaml -n owlpane --create-namespace
+endpoint: https://ingest.example.com
+ingestKeySecret:
+  name: owlpane-ingest-key
+  key: key
+environment: production
+cluster:
+  name: standalone-host
+
+nodeAgent:
+  enabled: false
+clusterCollector:
+  enabled: false
+standaloneCollector:
+  enabled: true
+  hostmetrics:
+    enabled: true
+  resourcedetection:
+    enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+carbon:
+  kepler:
+    enabled: false

@@ -35,11 +35,55 @@ nodeAgent:
   kubeletInsecureSkipVerify: false   # set true only for clusters with self-signed kubelet certificates
   collectionInterval: 30s
   otlpHostPort: false                # expose 4317/4318 on the node for local pods (host network ports)
+  # Host-level metrics (CPU, memory, disk, load, network, filesystem) from the node OS itself, next to
+  # kubeletstats. Feeds Infrastructure → Hosts and the carbon validation cross-check; Kubernetes carbon
+  # attribution stays on kubeletstats. Mounts the host root read-only at /hostfs (see README "Security").
+  hostmetrics:
+    enabled: true
+  # Detects cloud.provider, cloud.region and host.type (env, then GCP, EC2, Azure) so carbon can pick a
+  # power profile and grid zone. The env detector reads OTEL_RESOURCE_ATTRIBUTES first, so on-prem
+  # clusters can set cloud.region / host.type there as a manual override.
+  resourcedetection:
+    enabled: true
+  # Extra environment variables for the node agent. On clusters with no cloud metadata API, set the
+  # carbon region and instance type here (replaces the chart's own OTEL_RESOURCE_ATTRIBUTES):
+  # extraEnv:
+  #   - { name: OTEL_RESOURCE_ATTRIBUTES, value: "host.name=$(K8S_NODE_NAME),cloud.provider=onprem,cloud.region=eu-central,host.type=server" }
+  extraEnv: []
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 256Mi }
   tolerations:
     - operator: Exists
+
+# Owlpane Carbon: measured node power via Kepler (https://sustainable-computing.io). Off by default:
+# Kepler runs privileged with host /proc and /sys to reach RAPL/HWMON energy counters. When enabled,
+# the chart deploys Kepler v0.12.0 (the 0.10+ rewrite; metric kepler_node_cpu_watts on port 28282) as a
+# host-network DaemonSet and the node agent scrapes its own node's Kepler over the node IP. Node energy
+# then reports mode "measured" instead of the power-model estimate. See README "Security".
+# VM / Docker host without Kubernetes: single-replica collector + hostmetrics (Phase 7). See values-standalone.yaml.
+standaloneCollector:
+  enabled: false
+  hostmetrics:
+    enabled: true
+  resourcedetection:
+    enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+carbon:
+  kepler:
+    enabled: false
+    image:
+      repository: quay.io/sustainable_computing_io/kepler
+      tag: "v0.12.0"   # pinned: metric names and labels are documented against this version
+    port: 28282
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 400Mi }
+    tolerations:
+      - operator: Exists
 
 # Cluster collector (one replica): cluster state (workloads, restarts, conditions) and Kubernetes events.
 clusterCollector:

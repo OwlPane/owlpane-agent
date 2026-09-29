@@ -24,7 +24,7 @@ Set **`apiEndpoint`** to your Owlpane API public URL so the chart can send heart
 | Piece | Kind | Does |
 |---|---|---|
 | cluster collector | Deployment (1) | workload state, HorizontalPodAutoscaler gauges (`k8s.hpa.current_replicas`, `desired_replicas`, `min_replicas`, `max_replicas`), PersistentVolumeClaim capacity and phase, restarts, node conditions, Kubernetes events, and optional Service/Ingress object snapshots for routing in the console |
-| node agent | DaemonSet | node, pod, container, and volume metrics from the kubelet (`k8s.volume.capacity`, `k8s.node.filesystem.usage`); an OTLP receiver applications can send to; optional container logs |
+| node agent | DaemonSet | node, pod, container, and volume metrics from the kubelet (`k8s.volume.capacity`, `k8s.node.filesystem.usage`); host-level CPU, memory, disk, load, network and filesystem metrics from the node OS (`hostmetrics`); cloud region and instance type detection (`resourcedetection`); an OTLP receiver applications can send to; optional container logs |
 | ops runner | Deployment (1) | When `apiEndpoint` is set: heartbeat + poll for queued operations (`ops.enabled` adds RBAC for apply) |
 
 ## What it is allowed to do
@@ -54,6 +54,10 @@ cosign verify ghcr.io/balaji-singh/owlpane-agent:0.1.10 \
 ```
 
 Containers run non-root (except when log collection is enabled, which must read the node's log directory), with a read-only filesystem and all capabilities dropped.
+
+**Host metrics (default on):** `nodeAgent.hostmetrics.enabled=true` mounts the host's root filesystem **read-only** at `/hostfs` so the `hostmetrics` receiver can read `/hostfs/proc` and `/hostfs/sys` for node CPU, memory, disk, load, network and filesystem series. The mount is `HostToContainer` propagation, the container keeps `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false` and dropped capabilities, and no host path is ever written. Set `nodeAgent.hostmetrics.enabled=false` to drop the mount and the receiver. Kubernetes carbon attribution stays on `kubeletstats`; host metrics feed the Infrastructure → Hosts view and validation cross-checks.
+
+**Cloud detection (default on):** `nodeAgent.resourcedetection.enabled=true` adds `cloud.provider`, `cloud.region` and `host.type` to node metrics (detectors: `env`, then GCP, EC2, Azure; 5 s timeout, no override of existing attributes). The `env` detector reads `OTEL_RESOURCE_ATTRIBUTES`, which the chart sets to `host.name=<node name>`; on clusters with no cloud metadata API, set the region and instance type yourself via `nodeAgent.extraEnv` (an example is commented in `values.yaml` — include `host.name=$(K8S_NODE_NAME)` in the value, because your entry replaces the chart's own).
 
 ## Privacy defaults
 

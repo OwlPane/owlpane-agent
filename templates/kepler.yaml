@@ -1,0 +1,48 @@
+{{- if and .Values.nodeAgent.enabled .Values.carbon.kepler.enabled }}
+# Kepler: measured node energy (RAPL/HWMON/ACPI counters) for Owlpane Carbon's "measured" mode.
+# Runs privileged with read-only host /proc and /sys — that is what the energy counters require
+# (https://sustainable-computing.io/docs/user/installation/). hostNetwork so the node agent on the
+# same node scrapes it over the node IP; the scrape config is in node-config.yaml (prometheus/kepler).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: owlpane-kepler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "owlpane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kepler
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: owlpane-kepler
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: owlpane-kepler
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: kepler
+    spec:
+      hostNetwork: true
+      containers:
+        - name: kepler
+          image: "{{ .Values.carbon.kepler.image.repository }}:{{ .Values.carbon.kepler.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: metrics, containerPort: {{ .Values.carbon.kepler.port }}, hostPort: {{ .Values.carbon.kepler.port }} }
+          securityContext:
+            # Required by Kepler for RAPL/HWMON energy counters; there is no unprivileged mode.
+            privileged: true
+          volumeMounts:
+            - { name: proc, mountPath: /host/proc, readOnly: true }
+            - { name: sys, mountPath: /host/sys, readOnly: true }
+          env:
+            - { name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
+          resources:
+            {{- toYaml .Values.carbon.kepler.resources | nindent 12 }}
+      volumes:
+        - { name: proc, hostPath: { path: /proc, type: Directory } }
+        - { name: sys, hostPath: { path: /sys, type: Directory } }
+      tolerations:
+        {{- toYaml .Values.carbon.kepler.tolerations | nindent 8 }}
+{{- end }}

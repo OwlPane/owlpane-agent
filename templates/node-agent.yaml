@@ -35,6 +35,13 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["--config=/conf/config.yaml"]
           env: {{- include "owlpane.env" . | nindent 12 }}
+            {{- if .Values.nodeAgent.resourcedetection.enabled }}
+            # host.name is the node, not the pod; the env detector of resourcedetection picks this up.
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "host.name=$(K8S_NODE_NAME)" }
+            {{- end }}
+            {{- with .Values.nodeAgent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - { name: otlp-http, containerPort: 4318{{ if .Values.nodeAgent.otlpHostPort }}, hostPort: 4318{{ end }} }
             - { name: otlp-grpc, containerPort: 4317{{ if .Values.nodeAgent.otlpHostPort }}, hostPort: 4317{{ end }} }
@@ -47,6 +54,10 @@ spec:
             capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: conf, mountPath: /conf, readOnly: true }
+            {{- if .Values.nodeAgent.hostmetrics.enabled }}
+            # Host root, read-only: the hostmetrics receiver reads /hostfs/proc and /hostfs/sys.
+            - { name: hostfs, mountPath: /hostfs, readOnly: true, mountPropagation: HostToContainer }
+            {{- end }}
             {{- if .Values.logs.enabled }}
             - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
             - { name: varlibdocker, mountPath: /var/lib/docker/containers, readOnly: true }
@@ -54,6 +65,9 @@ spec:
       volumes:
         - name: conf
           configMap: { name: owlpane-node-agent }
+        {{- if .Values.nodeAgent.hostmetrics.enabled }}
+        - { name: hostfs, hostPath: { path: /, type: Directory } }
+        {{- end }}
         {{- if .Values.logs.enabled }}
         - { name: varlogpods, hostPath: { path: /var/log/pods } }
         - { name: varlibdocker, hostPath: { path: /var/lib/docker/containers } }

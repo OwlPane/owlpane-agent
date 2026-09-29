@@ -31,6 +31,8 @@ otlp_http:
       key: {{ .Values.ingestKeySecret.key }}
 - name: K8S_NODE_NAME
   valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+- name: K8S_NODE_IP
+  valueFrom: { fieldRef: { fieldPath: status.hostIP } }
 - name: K8S_POD_IP
   valueFrom: { fieldRef: { fieldPath: status.podIP } }
 - name: GOMEMLIMIT

@@ -1,0 +1,99 @@
+{{- if .Values.standaloneCollector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: owlpane-standalone-collector
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http: { endpoint: "0.0.0.0:4318" }
+          grpc: { endpoint: "0.0.0.0:4317" }
+      {{- if .Values.standaloneCollector.hostmetrics.enabled }}
+      hostmetrics:
+        collection_interval: 30s
+        root_path: /hostfs
+        scrapers:
+          cpu:
+          memory:
+          disk:
+          load:
+          network:
+          filesystem:
+      {{- end }}
+    processors:
+      memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
+      {{- if .Values.standaloneCollector.resourcedetection.enabled }}
+      resourcedetection:
+        detectors: [env, system, gcp, ec2, azure]
+        timeout: 5s
+        override: false
+      {{- end }}
+      resource:
+        attributes:
+          - { key: host.name, from_attribute: host.name, action: upsert }
+          - { key: deployment.environment.name, value: {{ .Values.environment | quote }}, action: insert }
+          - { key: service.name, value: "host", action: insert }
+      batch: { send_batch_size: 2000, timeout: 5s }
+    exporters:
+      {{- include "owlpane.exporter" . | nindent 6 }}
+    extensions:
+      health_check: { endpoint: "0.0.0.0:13133" }
+    service:
+      extensions: [health_check]
+      telemetry: { metrics: { level: none } }
+      pipelines:
+        metrics:
+          receivers: [otlp{{ if .Values.standaloneCollector.hostmetrics.enabled }}, hostmetrics{{ end }}]
+          processors: [memory_limiter{{ if .Values.standaloneCollector.resourcedetection.enabled }}, resourcedetection{{ end }}, resource, batch]
+          exporters: [otlp_http]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlp_http]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: owlpane-standalone-collector
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: owlpane-standalone
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: owlpane-standalone
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: collector
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          args: ["--config=/etc/owlpane/config.yaml"]
+          env:
+            - name: OWLPANE_INGEST_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ingestKeySecret.name }}
+                  key: {{ .Values.ingestKeySecret.key }}
+            - { name: GOMEMLIMIT, value: "200MiB" }
+          volumeMounts:
+            - { name: config, mountPath: /etc/owlpane }
+            {{- if .Values.standaloneCollector.hostmetrics.enabled }}
+            - { name: hostfs, mountPath: /hostfs, readOnly: true }
+            {{- end }}
+          resources:
+            {{- toYaml .Values.standaloneCollector.resources | nindent 12 }}
+      volumes:
+        - { name: config, configMap: { name: owlpane-standalone-collector } }
+        {{- if .Values.standaloneCollector.hostmetrics.enabled }}
+        - { name: hostfs, hostPath: { path: /, type: Directory } }
+        {{- end }}
+{{- end }}

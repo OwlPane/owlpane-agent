@@ -21,6 +21,16 @@
 
 Changing `cluster.name` creates a new cluster identity in the console.
 
+### 0.3.1
+
+- Optional **Kepler** measured node power (`carbon.kepler.enabled`, default **false**): deploys Kepler **v0.12.0** as a privileged host-network DaemonSet and adds a `prometheus/kepler` scrape on the node agent (`kepler_node_cpu_watts` → Owlpane Carbon **measured** mode). Review host `/proc` and `/sys` mounts and privileged caps before enabling in production; see README "Security".
+
+### 0.3.0
+
+- The node agent adds the `hostmetrics` receiver (default on, `nodeAgent.hostmetrics.enabled`): host-level CPU, memory, disk, load, network and filesystem series from the node OS, read from a **read-only** host root mount at `/hostfs`. This is a new `hostPath` mount of `/` — review it against your policies (`test-footprint.sh` covers the footprint); disable with `nodeAgent.hostmetrics.enabled=false` to drop mount and receiver. Kubernetes carbon attribution stays on `kubeletstats`; host metrics feed Infrastructure → Hosts and validation cross-checks.
+- The node agent adds a `resourcedetection` processor (default on, `nodeAgent.resourcedetection.enabled`): `cloud.provider`, `cloud.region` and `host.type` on node metrics, detectors `env` → GCP → EC2 → Azure, no override of existing attributes. `host.name` is set to the node name via `OTEL_RESOURCE_ATTRIBUTES`. On clusters with no cloud metadata API, set region and instance type manually through the new `nodeAgent.extraEnv` (example in `values.yaml`).
+- No RBAC change: both features read the node, not the API server.
+
 ### 0.2.0
 
 - New optional `ndm` component: polls network devices (routers, switches, firewalls) over SNMP v2c/v3 plus ICMP ping and reports `snmp.if.*`, `snmp.cpu.util`, `snmp.memory.used_pct`, `owlpane.ping.*` metrics and `owlpane.ndm.*` inventory logs. Off by default; `ndm.devices` lists targets and credentials come from Secrets you create (`communitySecret` / `v3.userSecret`…), never from values. The pod mounts no service-account token and needs no Kubernetes RBAC. Requires the `ghcr.io/balaji-singh/owlpane-ndm` image (published on `ndm-v*` tags) or your own build of `docker/ndm`.
