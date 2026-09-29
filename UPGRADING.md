@@ -23,6 +23,7 @@ Changing `cluster.name` creates a new cluster identity in the console.
 
 ### 0.3.1
 
+- Upgrading from chart **&lt; 0.3.0** with `--reuse-values` alone can miss new keys (`nodeAgent.hostmetrics`, `standaloneCollector`, `carbon`). Prefer `helm upgrade … -f values.yaml` (ship defaults from the chart) plus your overrides, or merge your saved values with the current `values.yaml` before upgrade.
 - Optional **Kepler** measured node power (`carbon.kepler.enabled`, default **false**): deploys Kepler **v0.12.0** as a privileged host-network DaemonSet and adds a `prometheus/kepler` scrape on the node agent (`kepler_node_cpu_watts` → Owlpane Carbon **measured** mode). Review host `/proc` and `/sys` mounts and privileged caps before enabling in production; see README "Security".
 
 ### 0.3.0
