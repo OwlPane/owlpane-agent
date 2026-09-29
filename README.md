@@ -50,7 +50,7 @@ The chart then renders a namespaced `Role`/`RoleBinding` per listed namespace an
 Releases are signed keylessly with cosign; the signature lives in the registry next to the chart:
 
 ```bash
-cosign verify ghcr.io/balaji-singh/owlpane-agent:0.3.1 \
+cosign verify ghcr.io/balaji-singh/owlpane-agent:0.3.2 \
   --certificate-identity-regexp 'https://github.com/.*/owlpane-agent/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
