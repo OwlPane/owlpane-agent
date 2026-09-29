@@ -1,4 +1,7 @@
-{{- if and .Values.nodeAgent.enabled .Values.carbon.kepler.enabled }}
+{{- $na := include "owlpane.nodeAgentMerged" . | fromYaml -}}
+{{- $carbon := include "owlpane.carbonMerged" . | fromYaml -}}
+{{- $kepler := index $carbon "kepler" | default dict -}}
+{{- if and $na.enabled (index $kepler "enabled" | default false) }}
 # Kepler: measured node energy (RAPL/HWMON/ACPI counters) for Owlpane Carbon's "measured" mode.
 # Runs privileged with read-only host /proc and /sys — that is what the energy counters require
 # (https://sustainable-computing.io/docs/user/installation/). hostNetwork so the node agent on the
@@ -26,10 +29,10 @@ spec:
       hostNetwork: true
       containers:
         - name: kepler
-          image: "{{ .Values.carbon.kepler.image.repository }}:{{ .Values.carbon.kepler.image.tag }}"
+          image: "{{ (index $kepler "image" | default dict).repository | default "quay.io/sustainable_computing_io/kepler" }}:{{ (index $kepler "image" | default dict).tag | default "v0.12.0" }}"
           imagePullPolicy: IfNotPresent
           ports:
-            - { name: metrics, containerPort: {{ .Values.carbon.kepler.port }}, hostPort: {{ .Values.carbon.kepler.port }} }
+            - { name: metrics, containerPort: {{ index $kepler "port" | default 28282 }}, hostPort: {{ index $kepler "port" | default 28282 }} }
           securityContext:
             # Required by Kepler for RAPL/HWMON energy counters; there is no unprivileged mode.
             privileged: true
@@ -39,10 +42,10 @@ spec:
           env:
             - { name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
           resources:
-            {{- toYaml .Values.carbon.kepler.resources | nindent 12 }}
+            {{- toYaml (index $kepler "resources" | default dict) | nindent 12 }}
       volumes:
         - { name: proc, hostPath: { path: /proc, type: Directory } }
         - { name: sys, hostPath: { path: /sys, type: Directory } }
       tolerations:
-        {{- toYaml .Values.carbon.kepler.tolerations | nindent 8 }}
+        {{- toYaml (index $kepler "tolerations" | default (list (dict "operator" "Exists"))) | nindent 8 }}
 {{- end }}

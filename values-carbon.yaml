@@ -1,0 +1,12 @@
+# Owlpane Carbon — estimated node power (hostmetrics + cloud/on-prem region detection).
+# Use with your install values and endpoint/cluster.name:
+#   helm upgrade --install owlpane oci://ghcr.io/balaji-singh/owlpane-agent --version 0.3.2 -n owlpane \
+#     -f values.yaml -f values-carbon.yaml --set endpoint=… --set cluster.name=…
+#
+# hostmetrics + resourcedetection stay on (chart defaults). Set carbon.region when the cluster has
+# no cloud metadata API so node metrics carry cloud.region for grid / power profiling:
+# carbon:
+#   region: eu-central-1
+
+carbon:
+  region: ""

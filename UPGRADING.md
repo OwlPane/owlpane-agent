@@ -21,9 +21,14 @@
 
 Changing `cluster.name` creates a new cluster identity in the console.
 
+### 0.3.2
+
+- **Carbon profiles**: optional `-f values-carbon.yaml` (estimated), `-f values-carbon-measured.yaml` (Kepler), or `-f values-carbon-onprem.yaml` (example region/`extraEnv`). Set `carbon.region` when cloud metadata is unavailable; it is merged into `OTEL_RESOURCE_ATTRIBUTES` on the node agent.
+- Templates use merged defaults so `helm upgrade --reuse-values` from pre-0.3.0 releases no longer nil-panics on missing `standaloneCollector` / `nodeAgent.hostmetrics` keys.
+
 ### 0.3.1
 
-- Upgrading from chart **&lt; 0.3.0** with `--reuse-values` alone can miss new keys (`nodeAgent.hostmetrics`, `standaloneCollector`, `carbon`). Prefer `helm upgrade … -f values.yaml` (ship defaults from the chart) plus your overrides, or merge your saved values with the current `values.yaml` before upgrade.
+- Upgrading from chart **&lt; 0.3.0** with `--reuse-values` alone can miss new keys (`nodeAgent.hostmetrics`, `standaloneCollector`, `carbon`). Prefer `helm upgrade … -f values.yaml` (ship defaults from the chart) plus your overrides, or merge your saved values with the current `values.yaml` before upgrade. Chart **0.3.2+** is safer with `--reuse-values` for those keys.
 - Optional **Kepler** measured node power (`carbon.kepler.enabled`, default **false**): deploys Kepler **v0.12.0** as a privileged host-network DaemonSet and adds a `prometheus/kepler` scrape on the node agent (`kepler_node_cpu_watts` → Owlpane Carbon **measured** mode). Review host `/proc` and `/sys` mounts and privileged caps before enabling in production; see README "Security".
 
 ### 0.3.0

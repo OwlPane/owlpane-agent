@@ -1,4 +1,5 @@
-{{- if .Values.nodeAgent.enabled }}
+{{- $na := include "owlpane.nodeAgentMerged" . | fromYaml -}}
+{{- if $na.enabled }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -20,7 +21,7 @@ spec:
       serviceAccountName: {{ include "owlpane.sa" . }}
       automountServiceAccountToken: true
       priorityClassName: system-node-critical
-      tolerations: {{- toYaml .Values.nodeAgent.tolerations | nindent 8 }}
+      tolerations: {{- toYaml (index $na "tolerations" | default (list (dict "operator" "Exists"))) | nindent 8 }}
       securityContext:
         {{- if .Values.logs.enabled }}
         runAsUser: 0
@@ -35,26 +36,30 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["--config=/conf/config.yaml"]
           env: {{- include "owlpane.env" . | nindent 12 }}
-            {{- if .Values.nodeAgent.resourcedetection.enabled }}
-            # host.name is the node, not the pod; the env detector of resourcedetection picks this up.
-            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "host.name=$(K8S_NODE_NAME)" }
+            {{- $rd := index $na "resourcedetection" | default dict -}}
+            {{- if index $rd "enabled" | default true }}
+            {{- $otelRa := include "owlpane.nodeOtelResourceAttributes" . | trim -}}
+            {{- if $otelRa }}
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: {{ $otelRa | quote }} }
             {{- end }}
-            {{- with .Values.nodeAgent.extraEnv }}
+            {{- end }}
+            {{- with index $na "extraEnv" }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
-            - { name: otlp-http, containerPort: 4318{{ if .Values.nodeAgent.otlpHostPort }}, hostPort: 4318{{ end }} }
-            - { name: otlp-grpc, containerPort: 4317{{ if .Values.nodeAgent.otlpHostPort }}, hostPort: 4317{{ end }} }
+            - { name: otlp-http, containerPort: 4318{{ if index $na "otlpHostPort" }}, hostPort: 4318{{ end }} }
+            - { name: otlp-grpc, containerPort: 4317{{ if index $na "otlpHostPort" }}, hostPort: 4317{{ end }} }
           readinessProbe: { httpGet: { path: /, port: 13133 }, periodSeconds: 10 }
           livenessProbe: { httpGet: { path: /, port: 13133 }, periodSeconds: 20, initialDelaySeconds: 15 }
-          resources: {{- toYaml .Values.nodeAgent.resources | nindent 12 }}
+          resources: {{- toYaml (index $na "resources" | default dict) | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: conf, mountPath: /conf, readOnly: true }
-            {{- if .Values.nodeAgent.hostmetrics.enabled }}
+            {{- $hm := index $na "hostmetrics" | default dict -}}
+            {{- if index $hm "enabled" | default true }}
             # Host root, read-only: the hostmetrics receiver reads /hostfs/proc and /hostfs/sys.
             - { name: hostfs, mountPath: /hostfs, readOnly: true, mountPropagation: HostToContainer }
             {{- end }}
@@ -65,7 +70,8 @@ spec:
       volumes:
         - name: conf
           configMap: { name: owlpane-node-agent }
-        {{- if .Values.nodeAgent.hostmetrics.enabled }}
+        {{- $hm := index $na "hostmetrics" | default dict -}}
+        {{- if index $hm "enabled" | default true }}
         - { name: hostfs, hostPath: { path: /, type: Directory } }
         {{- end }}
         {{- if .Values.logs.enabled }}

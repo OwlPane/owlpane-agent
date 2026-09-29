@@ -1,4 +1,9 @@
-{{- if .Values.nodeAgent.enabled }}
+{{- $na := include "owlpane.nodeAgentMerged" . | fromYaml -}}
+{{- $carbon := include "owlpane.carbonMerged" . | fromYaml -}}
+{{- $hm := index $na "hostmetrics" | default dict -}}
+{{- $rd := index $na "resourcedetection" | default dict -}}
+{{- $kepler := index $carbon "kepler" | default dict -}}
+{{- if $na.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,13 +19,13 @@ data:
           grpc: { endpoint: "0.0.0.0:4317" }
       kubelet_stats:
         auth_type: serviceAccount
-        collection_interval: {{ .Values.nodeAgent.collectionInterval }}
+        collection_interval: {{ index $na "collectionInterval" | default "30s" }}
         endpoint: "https://${env:K8S_NODE_NAME}:10250"
-        insecure_skip_verify: {{ .Values.nodeAgent.kubeletInsecureSkipVerify }}
+        insecure_skip_verify: {{ index $na "kubeletInsecureSkipVerify" | default false }}
         metric_groups: [node, pod, container, volume]
-      {{- if .Values.nodeAgent.hostmetrics.enabled }}
+      {{- if index $hm "enabled" | default true }}
       hostmetrics:
-        collection_interval: {{ .Values.nodeAgent.collectionInterval }}
+        collection_interval: {{ index $na "collectionInterval" | default "30s" }}
         root_path: /hostfs
         scrapers:
           cpu:
@@ -30,15 +35,15 @@ data:
           network:
           filesystem:
       {{- end }}
-      {{- if .Values.carbon.kepler.enabled }}
+      {{- if index $kepler "enabled" | default false }}
       # Scrape this node's own Kepler (host-network DaemonSet) for measured node power.
       prometheus/kepler:
         config:
           scrape_configs:
             - job_name: kepler
-              scrape_interval: {{ .Values.nodeAgent.collectionInterval }}
+              scrape_interval: {{ index $na "collectionInterval" | default "30s" }}
               static_configs:
-                - targets: ["${env:K8S_NODE_IP}:{{ .Values.carbon.kepler.port }}"]
+                - targets: ["${env:K8S_NODE_IP}:{{ index $kepler "port" | default 28282 }}"]
       {{- end }}
       {{- if .Values.logs.enabled }}
       filelog:
@@ -53,7 +58,7 @@ data:
       {{- end }}
     processors:
       memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
-      {{- if .Values.nodeAgent.resourcedetection.enabled }}
+      {{- if index $rd "enabled" | default true }}
       # env first so OTEL_RESOURCE_ATTRIBUTES wins (manual override for on-prem); then cloud detectors.
       resourcedetection:
         detectors: [env, gcp, ec2, azure]
@@ -66,14 +71,14 @@ data:
           - { key: k8s.cluster.name, value: {{ .Values.cluster.name | quote }}, action: upsert }
           - { key: service.name, value: "kubernetes-node", action: insert }
           - { key: deployment.environment.name, value: {{ .Values.environment | quote }}, action: insert }
-      {{- if .Values.carbon.kepler.enabled }}
+      {{- if index $kepler "enabled" | default false }}
       # Kepler metrics get the node identity here, not via OTEL_RESOURCE_ATTRIBUTES, so app OTLP
       # passing through the node agent is never mis-tagged as node telemetry.
       resource/kepler:
         attributes:
           - { key: k8s.cluster.name, value: {{ .Values.cluster.name | quote }}, action: upsert }
           - { key: k8s.node.name, value: ${env:K8S_NODE_NAME}, action: upsert }
-          - { key: service.name, value: "kepler", action: upsert }
+          - { key: service.name, value: "kepler", action: insert }
           - { key: deployment.environment.name, value: {{ .Values.environment | quote }}, action: insert }
       {{- end }}
       # Never forward what identifies a person or carries a credential.
@@ -99,10 +104,10 @@ data:
       telemetry: { metrics: { level: none } }
       pipelines:
         metrics:
-          receivers: [otlp, kubelet_stats{{ if .Values.nodeAgent.hostmetrics.enabled }}, hostmetrics{{ end }}]
-          processors: [memory_limiter{{ if .Values.nodeAgent.resourcedetection.enabled }}, resourcedetection{{ end }}, k8s_attributes, resource, batch]
+          receivers: [otlp, kubelet_stats{{ if index $hm "enabled" | default true }}, hostmetrics{{ end }}]
+          processors: [memory_limiter{{ if index $rd "enabled" | default true }}, resourcedetection{{ end }}, k8s_attributes, resource, batch]
           exporters: [otlp_http]
-        {{- if .Values.carbon.kepler.enabled }}
+        {{- if index $kepler "enabled" | default false }}
         metrics/kepler:
           receivers: [prometheus/kepler]
           processors: [memory_limiter, resource/kepler, batch]

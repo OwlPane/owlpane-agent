@@ -23,6 +23,24 @@ otlp_http:
   retry_on_failure: { enabled: true, initial_interval: 2s, max_interval: 30s, max_elapsed_time: 300s }
   sending_queue: { enabled: true, queue_size: 1000 }
 {{- end -}}
+{{- define "owlpane.nodeAgentMerged" -}}
+{{- mergeOverwrite (dict "enabled" true "hostmetrics" (dict "enabled" true) "resourcedetection" (dict "enabled" true) "extraEnv" (list) "kubeletInsecureSkipVerify" false "collectionInterval" "30s" "otlpHostPort" false) (default dict .Values.nodeAgent) | toYaml -}}
+{{- end -}}
+{{- define "owlpane.standaloneCollectorMerged" -}}
+{{- mergeOverwrite (dict "enabled" false "hostmetrics" (dict "enabled" true) "resourcedetection" (dict "enabled" true) "resources" (dict)) (default dict .Values.standaloneCollector) | toYaml -}}
+{{- end -}}
+{{- define "owlpane.carbonMerged" -}}
+{{- mergeOverwrite (dict "region" "" "kepler" (dict "enabled" false "port" 28282 "image" (dict "repository" "quay.io/sustainable_computing_io/kepler" "tag" "v0.12.0") "resources" (dict "requests" (dict "cpu" "50m" "memory" "128Mi") "limits" (dict "memory" "400Mi")) "tolerations" (list (dict "operator" "Exists")))) (default dict .Values.carbon) | toYaml -}}
+{{- end -}}
+{{- define "owlpane.nodeOtelResourceAttributes" -}}
+{{- $carbon := include "owlpane.carbonMerged" . | fromYaml -}}
+{{- $na := include "owlpane.nodeAgentMerged" . | fromYaml -}}
+{{- $rd := index $na "resourcedetection" | default dict -}}
+{{- if index $rd "enabled" | default true -}}
+{{- $region := index $carbon "region" | default "" -}}
+{{- if $region -}}host.name=$(K8S_NODE_NAME),cloud.region={{ $region }}{{- else -}}host.name=$(K8S_NODE_NAME){{- end -}}
+{{- end -}}
+{{- end -}}
 {{- define "owlpane.env" -}}
 - name: OWLPANE_INGEST_KEY
   valueFrom:

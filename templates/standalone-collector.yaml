@@ -1,4 +1,7 @@
-{{- if .Values.standaloneCollector.enabled }}
+{{- $sc := include "owlpane.standaloneCollectorMerged" . | fromYaml -}}
+{{- $scHm := index $sc "hostmetrics" | default dict -}}
+{{- $scRd := index $sc "resourcedetection" | default dict -}}
+{{- if index $sc "enabled" | default false }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,7 +15,7 @@ data:
         protocols:
           http: { endpoint: "0.0.0.0:4318" }
           grpc: { endpoint: "0.0.0.0:4317" }
-      {{- if .Values.standaloneCollector.hostmetrics.enabled }}
+      {{- if index $scHm "enabled" | default true }}
       hostmetrics:
         collection_interval: 30s
         root_path: /hostfs
@@ -26,7 +29,7 @@ data:
       {{- end }}
     processors:
       memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
-      {{- if .Values.standaloneCollector.resourcedetection.enabled }}
+      {{- if index $scRd "enabled" | default true }}
       resourcedetection:
         detectors: [env, system, gcp, ec2, azure]
         timeout: 5s
@@ -47,8 +50,8 @@ data:
       telemetry: { metrics: { level: none } }
       pipelines:
         metrics:
-          receivers: [otlp{{ if .Values.standaloneCollector.hostmetrics.enabled }}, hostmetrics{{ end }}]
-          processors: [memory_limiter{{ if .Values.standaloneCollector.resourcedetection.enabled }}, resourcedetection{{ end }}, resource, batch]
+          receivers: [otlp{{ if index $scHm "enabled" | default true }}, hostmetrics{{ end }}]
+          processors: [memory_limiter{{ if index $scRd "enabled" | default true }}, resourcedetection{{ end }}, resource, batch]
           exporters: [otlp_http]
         traces:
           receivers: [otlp]
@@ -86,14 +89,14 @@ spec:
             - { name: GOMEMLIMIT, value: "200MiB" }
           volumeMounts:
             - { name: config, mountPath: /etc/owlpane }
-            {{- if .Values.standaloneCollector.hostmetrics.enabled }}
+            {{- if index $scHm "enabled" | default true }}
             - { name: hostfs, mountPath: /hostfs, readOnly: true }
             {{- end }}
           resources:
-            {{- toYaml .Values.standaloneCollector.resources | nindent 12 }}
+            {{- toYaml (index $sc "resources" | default dict) | nindent 12 }}
       volumes:
         - { name: config, configMap: { name: owlpane-standalone-collector } }
-        {{- if .Values.standaloneCollector.hostmetrics.enabled }}
+        {{- if index $scHm "enabled" | default true }}
         - { name: hostfs, hostPath: { path: /, type: Directory } }
         {{- end }}
 {{- end }}
