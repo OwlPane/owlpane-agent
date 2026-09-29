@@ -11,7 +11,7 @@ metrics arrive with `k8s.cluster.name` and your project key.
 ```bash
 kubectl create namespace owlpane
 kubectl -n owlpane create secret generic owlpane-ingest --from-literal=key=owl_ing_YOUR_KEY
-helm install owlpane oci://ghcr.io/balaji-singh/owlpane-agent --version 0.1.10 -n owlpane \
+helm install owlpane oci://ghcr.io/balaji-singh/owlpane-agent --version 0.3.1 -n owlpane \
   --set endpoint=https://ingest.example.com \
   --set apiEndpoint=https://api.example.com \
   --set cluster.name=production-eu
@@ -48,7 +48,7 @@ The chart then renders a namespaced `Role`/`RoleBinding` per listed namespace an
 Releases are signed keylessly with cosign; the signature lives in the registry next to the chart:
 
 ```bash
-cosign verify ghcr.io/balaji-singh/owlpane-agent:0.1.10 \
+cosign verify ghcr.io/balaji-singh/owlpane-agent:0.3.1 \
   --certificate-identity-regexp 'https://github.com/.*/owlpane-agent/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
