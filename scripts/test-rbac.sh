@@ -161,12 +161,13 @@ PY
   # Stand-ins for the files Kubernetes mounts into a pod, so the receivers can start up.
   openssl req -x509 -newkey rsa:2048 -nodes -keyout /dev/null -out "$TMP/ca.crt" -subj /CN=test -days 1 >/dev/null 2>&1
   echo token > "$TMP/token"
+  mkdir -p "$TMP/hostfs"   # the node agent's hostmetrics receiver checks that its root_path (/hostfs) exists
   SA=/var/run/secrets/kubernetes.io/serviceaccount
   for f in "$TMP"/owlpane-*.yaml; do
     docker run --rm -e OWLPANE_INGEST_KEY=k -e K8S_NODE_NAME=n -e PG_USER_0=u -e PG_PASSWORD_0=p -e REDIS_PASSWORD_0=p \
       -e MYSQL_USER_0=u -e MYSQL_PASSWORD_0=p -e MONGO_USER_0=u -e MONGO_PASSWORD_0=p -e RABBIT_USER_0=u -e RABBIT_PASSWORD_0=p \
       -e KUBERNETES_SERVICE_HOST=127.0.0.1 -e KUBERNETES_SERVICE_PORT=6443 \
-      -v "$TMP/ca.crt:$SA/ca.crt:ro" -v "$TMP/token:$SA/token:ro" -v "$f:/c.yaml:ro" "$IMG" validate --config=/c.yaml >/dev/null 2>"$TMP/err" || { echo "FAIL: collector rejects $(basename "$f")"; cat "$TMP/err"; exit 1; }
+      -v "$TMP/ca.crt:$SA/ca.crt:ro" -v "$TMP/token:$SA/token:ro" -v "$TMP/hostfs:/hostfs:ro" -v "$f:/c.yaml:ro" "$IMG" validate --config=/c.yaml >/dev/null 2>"$TMP/err" || { echo "FAIL: collector rejects $(basename "$f")"; cat "$TMP/err"; exit 1; }
   done
   echo "PASS: the collector accepts every rendered configuration"
 fi
