@@ -84,6 +84,22 @@ data:
       {{- end }}
     processors:
       memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
+      # The k8s_objects receiver ships whole Kubernetes objects. Two parts of them can hold secrets and must not leave
+      # the cluster: ConfigMap values (connection strings, tokens pasted into config) and kubectl's
+      # last-applied-configuration annotation (a full copy of the object as applied, values included). ConfigMap KEYS stay,
+      # because the console lists key names. Pull mode emits the object as the body; watch mode wraps it as body.object.
+      # Verified against the pinned collector (0.161.0) with sample ConfigMap, Deployment and Service bodies.
+      transform/strip_object_bodies:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              - delete_key(body["metadata"]["annotations"], "kubectl.kubernetes.io/last-applied-configuration")
+              - delete_key(body["object"]["metadata"]["annotations"], "kubectl.kubernetes.io/last-applied-configuration")
+              - replace_all_patterns(body["data"], "value", "(?s).*", "") where body["kind"] == "ConfigMap"
+              - replace_all_patterns(body["binaryData"], "value", "(?s).*", "") where body["kind"] == "ConfigMap"
+              - replace_all_patterns(body["object"]["data"], "value", "(?s).*", "") where body["object"]["kind"] == "ConfigMap"
+              - replace_all_patterns(body["object"]["binaryData"], "value", "(?s).*", "") where body["object"]["kind"] == "ConfigMap"
       resource:
         attributes:
           - { key: k8s.cluster.name, value: {{ .Values.cluster.name | quote }}, action: upsert }
@@ -105,7 +121,7 @@ data:
         {{- if .Values.clusterCollector.events }}
         logs:
           receivers: [k8s_objects]
-          processors: [memory_limiter, resource, batch]
+          processors: [memory_limiter, transform/strip_object_bodies, resource, batch]
           exporters: [otlp_http]
         {{- end }}
 {{- end }}

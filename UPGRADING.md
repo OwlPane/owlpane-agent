@@ -21,6 +21,10 @@
 
 Changing `cluster.name` creates a new cluster identity in the console.
 
+### Unreleased
+- **Security fix:** the cluster collector now removes ConfigMap values and the `kubectl.kubernetes.io/last-applied-configuration` annotation on the node before export (`transform/strip_object_bodies`). Earlier versions sent whole ConfigMap objects. ConfigMap key names are still sent (the console lists them). If you ran an earlier version, ask your Owlpane contact to purge stored object logs for your cluster.
+- Values in pod-template `env` are not removed by the agent. Keep secrets in Secrets and reference them with `valueFrom`.
+
 ### 0.3.1
 
 - Upgrading from chart **&lt; 0.3.0** with `--reuse-values` alone can miss new keys (`nodeAgent.hostmetrics`, `standaloneCollector`, `carbon`). Prefer `helm upgrade … -f values.yaml` (ship defaults from the chart) plus your overrides, or merge your saved values with the current `values.yaml` before upgrade.
@@ -56,4 +60,4 @@ Changing `cluster.name` creates a new cluster identity in the console.
 
 ## RBAC
 
-Published scope is enforced in CI via `scripts/test-rbac.sh`. Do not grant `secrets` or `configmaps` read without updating the threat model.
+Published scope is enforced in CI via `scripts/test-rbac.sh`. Do not grant `secrets` read. `configmaps` read is granted for the cluster explorer; values are stripped on the node (see the unreleased note above).
