@@ -182,3 +182,7 @@ username + password keys; the raw config never leaves the cluster unredacted.
 ## Uninstall
 
 `helm uninstall owlpane -n owlpane` removes everything the chart created.
+
+## Licence
+
+See [LICENSE](LICENSE): all rights reserved; you may view the source and install and run the unmodified chart to connect your clusters to Owlpane.
