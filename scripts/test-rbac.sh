@@ -124,6 +124,23 @@ assert cfg["service"]["pipelines"]["metrics/redaction"]["receivers"] == ["count"
 print("PASS: edge redaction (transform/redact + the redaction-counter metric) is on by default")
 PY
 
+# Whole Kubernetes objects leave the node through the cluster collector's k8s_objects receiver. ConfigMap values and
+# kubectl's last-applied-configuration annotation and pod env var values must be stripped there, in the logs pipeline, before export.
+"$PYTHON" - "$OUT" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "owlpane-cluster-collector")
+cfg = yaml.safe_load(cm["data"]["config.yaml"])
+assert "transform/strip_object_bodies" in cfg["processors"], "the object-body scrubber is missing"
+stmts = "\n".join(s for g in cfg["processors"]["transform/strip_object_bodies"]["log_statements"] for s in g["statements"])
+for needle in ("last-applied-configuration", 'body["data"]', 'body["binaryData"]', 'body["object"]["data"]', 'body["object"]["binaryData"]', "String(body)", "ParseJSON"):
+    assert needle in stmts, f"scrubber no longer covers {needle}"
+procs = cfg["service"]["pipelines"]["logs"]["processors"]
+assert "transform/strip_object_bodies" in procs, "the logs pipeline (k8s_objects) does not run the scrubber"
+assert procs.index("transform/strip_object_bodies") < procs.index("batch"), "the scrubber must run before batching and export"
+print("PASS: ConfigMap values, last-applied-configuration and env values are stripped from object logs before export")
+PY
+
 # The collector itself must accept the rendered configuration, so a setting the pinned version does
 # not know is caught here and not by a crash-looping pod. Needs docker (skipped when it is absent).
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then

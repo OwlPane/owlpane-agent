@@ -89,7 +89,9 @@ carbon:
 clusterCollector:
   enabled: true
   events: true
-  # Watch Kubernetes objects (metadata only in logs) for routing, labels, TLS and Gateway API in the console.
+  # Watch Kubernetes objects for routing, labels, TLS and Gateway API in the console. The receiver sends whole objects;
+  # ConfigMap values, the last-applied-configuration annotation and pod env var values are removed on the node before
+  # export (templates/cluster-config.yaml). ConfigMap keys, env var names and valueFrom references are kept.
   objectSnapshots: true
   watchPods: true
   # Requires cert-manager.io CRDs; if false, collector starts on vanilla clusters (Docker Desktop, kind).

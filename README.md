@@ -1,4 +1,4 @@
-# Owlpane Kubernetes agent
+# Owlpane agent for Kubernetes
 
 Helm chart **`owlpane-agent`** (OCI). Install the release as **`owlpane`** in namespace **`owlpane`** — same brand as the Owlpane SaaS and `@owlpane/*` SDKs.
 
