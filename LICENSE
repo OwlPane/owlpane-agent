@@ -1,0 +1,16 @@
+Owlpane agent: licence notice
+
+Copyright (c) 2026 The Owlpane Authors. All rights reserved.
+
+This repository is public so that customers can read the source and install the Helm chart. Permission is granted to
+view the source, and to install and run the unmodified chart to send telemetry from your own clusters to an Owlpane
+service. No other rights are granted: you may not copy, modify, redistribute or sublicense this software, or use it to
+build a competing service, without written permission.
+
+The software is provided "as is", without warranty of any kind.
+
+Third-party components (for example the OpenTelemetry Collector images the chart deploys) belong to their owners and are
+licensed under their own terms.
+
+This notice is a placeholder pending legal review and may be replaced by a different licence in a future release.
+Questions and permission requests: hello@owlpane.com
