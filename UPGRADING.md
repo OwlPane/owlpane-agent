@@ -22,8 +22,8 @@
 Changing `cluster.name` creates a new cluster identity in the console.
 
 ### Unreleased
-- **Security fix:** the cluster collector now removes ConfigMap values and the `kubectl.kubernetes.io/last-applied-configuration` annotation on the node before export (`transform/strip_object_bodies`). Earlier versions sent whole ConfigMap objects. ConfigMap key names are still sent (the console lists them). If you ran an earlier version, ask your Owlpane contact to purge stored object logs for your cluster.
-- Values in pod-template `env` are not removed by the agent. Keep secrets in Secrets and reference them with `valueFrom`.
+- **Security fix:** the cluster collector now removes, on the node and before export, ConfigMap values, the `kubectl.kubernetes.io/last-applied-configuration` annotation and the literal `value` of container env vars in pod specs (`transform/strip_object_bodies`). Earlier versions sent whole objects. Still sent: ConfigMap key names, env var names and `valueFrom` references (the console lists key names and shows which ConfigMaps a pod uses), tolerations, images and the rest of the spec. If you ran an earlier version, ask your Owlpane contact to purge stored object logs for your cluster.
+- `scripts/test-object-scrub.sh` runs the real receiver against a fake API server holding secrets and fails if any leaves the node.
 
 ### 0.3.1
 

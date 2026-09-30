@@ -11,7 +11,7 @@ metadata:
 ---
 # Read-only. Deliberately NOT granted: secrets, pods/exec, pods/log, any write verb, or
 # any resource beyond what is listed. ConfigMaps are read for the cluster explorer; their values are blanked and
-# kubectl's last-applied-configuration annotation is dropped on the node before export (transform/strip_object_bodies
+# kubectl last-applied-configuration annotation is dropped on the node before export (transform/strip_object_bodies
 # in cluster-config.yaml), so only key names leave the cluster.
 # test-rbac.sh enforces this on every change. Ops verbs live in rbac-ops.yaml and stay off unless ops.enabled.
 apiVersion: rbac.authorization.k8s.io/v1

@@ -84,11 +84,16 @@ data:
       {{- end }}
     processors:
       memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
-      # The k8s_objects receiver ships whole Kubernetes objects. Two parts of them can hold secrets and must not leave
-      # the cluster: ConfigMap values (connection strings, tokens pasted into config) and kubectl's
-      # last-applied-configuration annotation (a full copy of the object as applied, values included). ConfigMap KEYS stay,
-      # because the console lists key names. Pull mode emits the object as the body; watch mode wraps it as body.object.
-      # Verified against the pinned collector (0.161.0) with sample ConfigMap, Deployment and Service bodies.
+      # The k8s_objects receiver ships whole Kubernetes objects. Three parts of them can hold secrets and must not leave
+      # the cluster: ConfigMap values (connection strings, tokens pasted into config), kubectl's
+      # last-applied-configuration annotation (a full copy of the object as applied, values included), and the literal
+      # `value` of container env vars in pod specs. ConfigMap KEYS and env var NAMES and `valueFrom` references stay,
+      # because the console lists key names and shows which ConfigMaps a pod uses. Pull mode emits the object as the body;
+      # watch mode wraps it as body.object.
+      # OTTL cannot loop over a list, so the env scrub round-trips the body through JSON: the two regexes blank the value
+      # of {"name": ..., "value": ...} pairs in either key order (map order is not stable), then the body is parsed back.
+      # Verified against the pinned collector (0.161.0) with the real receiver reading a fake API server
+      # (scripts/test-object-scrub.sh runs the same check in CI).
       transform/strip_object_bodies:
         error_mode: ignore
         log_statements:
@@ -100,6 +105,10 @@ data:
               - replace_all_patterns(body["binaryData"], "value", "(?s).*", "") where body["kind"] == "ConfigMap"
               - replace_all_patterns(body["object"]["data"], "value", "(?s).*", "") where body["object"]["kind"] == "ConfigMap"
               - replace_all_patterns(body["object"]["binaryData"], "value", "(?s).*", "") where body["object"]["kind"] == "ConfigMap"
+              - set(cache["j"], String(body))
+              - 'replace_pattern(cache["j"], "(\"name\":\"(?:[^\"\\\\]|\\\\.)*\",\"value\":\")(?:[^\"\\\\]|\\\\.)*(\")", "$$1$$2")'
+              - 'replace_pattern(cache["j"], "(\"value\":\")(?:[^\"\\\\]|\\\\.)*(\",\"name\":\")", "$$1$$2")'
+              - set(body, ParseJSON(cache["j"]))
       resource:
         attributes:
           - { key: k8s.cluster.name, value: {{ .Values.cluster.name | quote }}, action: upsert }
