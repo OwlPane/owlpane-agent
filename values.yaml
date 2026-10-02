@@ -73,6 +73,13 @@ standaloneCollector:
     limits: { memory: 256Mi }
 
 carbon:
+  # GPU power for Owlpane Carbon (off by default). Owlpane does NOT deploy a GPU exporter: it scrapes the
+  # NVIDIA DCGM exporter you already run (GPU Operator or standalone) on this node, over the node IP.
+  # The exporter must be reachable at <node IP>:port (hostNetwork or hostPort). Only the three series
+  # Carbon uses are kept. Metric names are for dcgm-exporter 3.x and must be confirmed against the version you run.
+  gpu:
+    enabled: false
+    port: 9400
   kepler:
     enabled: false
     image:

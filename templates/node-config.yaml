@@ -40,6 +40,20 @@ data:
               static_configs:
                 - targets: ["${env:K8S_NODE_IP}:{{ .Values.carbon.kepler.port }}"]
       {{- end }}
+      {{- if .Values.carbon.gpu.enabled }}
+      # Scrape this node's NVIDIA DCGM exporter for GPU power, utilisation and framebuffer use.
+      prometheus/gpu:
+        config:
+          scrape_configs:
+            - job_name: dcgm-exporter
+              scrape_interval: {{ .Values.nodeAgent.collectionInterval }}
+              static_configs:
+                - targets: ["${env:K8S_NODE_IP}:{{ .Values.carbon.gpu.port }}"]
+              metric_relabel_configs:
+                - source_labels: [__name__]
+                  regex: DCGM_FI_DEV_POWER_USAGE|DCGM_FI_DEV_GPU_UTIL|DCGM_FI_DEV_FB_USED
+                  action: keep
+      {{- end }}
       {{- if .Values.logs.enabled }}
       filelog:
         include: [/var/log/pods/*/*/*.log]
@@ -76,6 +90,15 @@ data:
           - { key: service.name, value: "kepler", action: upsert }
           - { key: deployment.environment.name, value: {{ .Values.environment | quote }}, action: insert }
       {{- end }}
+      {{- if .Values.carbon.gpu.enabled }}
+      # Same node identity as Kepler: set here so app OTLP through the node agent is never mis-tagged.
+      resource/gpu:
+        attributes:
+          - { key: k8s.cluster.name, value: {{ .Values.cluster.name | quote }}, action: upsert }
+          - { key: k8s.node.name, value: ${env:K8S_NODE_NAME}, action: upsert }
+          - { key: service.name, value: "dcgm-exporter", action: upsert }
+          - { key: deployment.environment.name, value: {{ .Values.environment | quote }}, action: insert }
+      {{- end }}
       # Never forward what identifies a person or carries a credential.
       attributes/scrub:
         actions:
@@ -106,6 +129,12 @@ data:
         metrics/kepler:
           receivers: [prometheus/kepler]
           processors: [memory_limiter, resource/kepler, batch]
+          exporters: [otlp_http]
+        {{- end }}
+        {{- if .Values.carbon.gpu.enabled }}
+        metrics/gpu:
+          receivers: [prometheus/gpu]
+          processors: [memory_limiter, resource/gpu, batch]
           exporters: [otlp_http]
         {{- end }}
         {{- if .Values.redaction.enabled }}

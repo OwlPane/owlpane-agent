@@ -29,6 +29,7 @@ Changing `cluster.name` creates a new cluster identity in the console.
 
 - Upgrading from chart **&lt; 0.3.0** with `--reuse-values` alone can miss new keys (`nodeAgent.hostmetrics`, `standaloneCollector`, `carbon`). Prefer `helm upgrade … -f values.yaml` (ship defaults from the chart) plus your overrides, or merge your saved values with the current `values.yaml` before upgrade.
 - Optional **Kepler** measured node power (`carbon.kepler.enabled`, default **false**): deploys Kepler **v0.12.0** as a privileged host-network DaemonSet and adds a `prometheus/kepler` scrape on the node agent (`kepler_node_cpu_watts` → Owlpane Carbon **measured** mode). Review host `/proc` and `/sys` mounts and privileged caps before enabling in production; see README "Security".
+- Optional **GPU metrics** (`carbon.gpu.enabled`, default **false**): adds a `prometheus/gpu` scrape on the node agent for the NVIDIA DCGM exporter you already run (`DCGM_FI_DEV_POWER_USAGE`, `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_FB_USED`, kept by `metric_relabel_configs`, tagged `service.name=dcgm-exporter` and the node name). Nothing is deployed and no privileges are added. The exporter must be reachable at `<node IP>:carbon.gpu.port` (default 9400); metric names are for dcgm-exporter 3.x and are unverified against your version.
 
 ### 0.3.0
 
