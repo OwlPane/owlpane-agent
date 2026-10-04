@@ -1,6 +1,6 @@
 # Recommended owlpane-agent settings when you install owlpane-demo-workloads.
 # Usage:
-#   helm upgrade --install owlpane-agent oci://ghcr.io/balaji-singh/owlpane-agent -n owlpane \
+#   helm upgrade --install owlpane-agent oci://ghcr.io/owlpane/owlpane-agent -n owlpane \
 #     -f values-demo-workloads.yaml \
 #     --set endpoint=... --set cluster.name=...
 #

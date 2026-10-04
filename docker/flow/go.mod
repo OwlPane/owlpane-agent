@@ -1,3 +1,3 @@
-module github.com/balaji-singh/owlpane-agent/flow
+module github.com/OwlPane/owlpane-agent/flow
 
 go 1.23
