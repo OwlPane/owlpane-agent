@@ -11,7 +11,7 @@ metrics arrive with `k8s.cluster.name` and your project key.
 ```bash
 kubectl create namespace owlpane
 kubectl -n owlpane create secret generic owlpane-ingest --from-literal=key=owl_ing_YOUR_KEY
-helm install owlpane oci://ghcr.io/balaji-singh/owlpane-agent --version 0.3.1 -n owlpane \
+helm install owlpane oci://ghcr.io/owlpane/owlpane-agent --version 0.3.1 -n owlpane \
   --set endpoint=https://ingest.example.com \
   --set apiEndpoint=https://api.example.com \
   --set cluster.name=production-eu
@@ -48,7 +48,7 @@ The chart then renders a namespaced `Role`/`RoleBinding` per listed namespace an
 Releases are signed keylessly with cosign; the signature lives in the registry next to the chart:
 
 ```bash
-cosign verify ghcr.io/balaji-singh/owlpane-agent:0.3.1 \
+cosign verify ghcr.io/owlpane/owlpane-agent:0.3.1 \
   --certificate-identity-regexp 'https://github.com/.*/owlpane-agent/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -65,7 +65,7 @@ Pod labels and annotations are **not** attached unless you list them, and contai
 until you enable them (`logs.enabled=true`), because both often contain personal data. The ingest key
 lives in a Secret, never in the chart.
 
-Console: **Infrastructure → Databases** (inventory + onboarding wizard), **Kubernetes → Cluster explorer** (inventory and safe ops), and **Settings → Integrations** (Helm generator). See [database onboarding](https://github.com/balaji-singh/owlpane/blob/main/api/docs/ops/database-onboarding.md).
+Console: **Infrastructure → Databases** (inventory + onboarding wizard), **Kubernetes → Cluster explorer** (inventory and safe ops), and **Settings → Integrations** (Helm generator). See [database onboarding](https://github.com/OwlPane/owlpane-api/blob/main/docs/ops/database-onboarding.md).
 
 ## Database integrations (Postgres, Redis)
 
@@ -96,7 +96,7 @@ Off by default. When `networkCollector.enabled=true` the chart runs a DaemonSet 
 
 Namespace capture filters are not applied by the conntrack loop (it is node-scoped). Port filters are `networkCollector.captureFilters.ports`.
 
-Optional `networkCollector.ebpfCapture.enabled=true` (with `imagePublished=true`) runs a separate privileged DaemonSet using `ghcr.io/balaji-singh/network-ebpf` — **v0.1.0 is a bootstrap** host `/proc` sampler (`owlpane.flow.source=ebpf-capture`), not full CO-RE packet capture.
+Optional `networkCollector.ebpfCapture.enabled=true` (with `imagePublished=true`) runs a separate privileged DaemonSet using `ghcr.io/owlpane/network-ebpf` — **v0.1.0 is a bootstrap** host `/proc` sampler (`owlpane.flow.source=ebpf-capture`), not full CO-RE packet capture.
 
 ## Network device monitoring (NDM)
 

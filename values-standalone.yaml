@@ -1,5 +1,5 @@
 # Standalone Owlpane collector for a VM or Docker host (no Kubernetes API).
-# helm install owlpane oci://ghcr.io/balaji-singh/owlpane-agent -f values-standalone.yaml -n owlpane --create-namespace
+# helm install owlpane oci://ghcr.io/owlpane/owlpane-agent -f values-standalone.yaml -n owlpane --create-namespace
 endpoint: https://ingest.example.com
 ingestKeySecret:
   name: owlpane-ingest-key

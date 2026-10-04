@@ -2,7 +2,7 @@
 # never contains a credential. Create it with:
 #   kubectl -n owlpane create secret generic owlpane-ingest --from-literal=key=owl_ing_...
 # Install published chart (console Setup uses the same OCI ref):
-#   helm install owlpane oci://ghcr.io/balaji-singh/owlpane-agent --version 0.3.1 -n owlpane ...
+#   helm install owlpane oci://ghcr.io/owlpane/owlpane-agent --version 0.3.1 -n owlpane ...
 endpoint: ""                  # required, e.g. https://ingest.example.com
 apiEndpoint: ""               # Owlpane API, e.g. https://owlpane-api.example.com — enables heartbeat and, with ops.enabled, operations
 ingestKeySecret:
@@ -206,12 +206,12 @@ networkCollector:
   # data today, use the beyla option above plus OpenTelemetry SDKs, or the Kubeshark forwarder.
   ebpfCapture:
     enabled: false
-    imagePublished: true    # ghcr.io/balaji-singh/network-ebpf:0.1.0 (bootstrap; not full CO-RE BPF)
+    imagePublished: true    # ghcr.io/owlpane/network-ebpf:0.1.0 (bootstrap; not full CO-RE BPF)
     privileged: true
     hostNetwork: true
     delayedDissection: false
     image:
-      repository: ghcr.io/balaji-singh/network-ebpf
+      repository: ghcr.io/owlpane/network-ebpf
       tag: "0.1.0"
       pullPolicy: IfNotPresent
   tlsDecrypt:
@@ -227,7 +227,7 @@ ndm:
   intervalSeconds: 60
   maxInterfacesPerDevice: 64
   image:
-    repository: ghcr.io/balaji-singh/owlpane-ndm
+    repository: ghcr.io/owlpane/owlpane-ndm
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   resources:
@@ -274,7 +274,7 @@ ndm:
     serviceType: ClusterIP                       # ClusterIP | NodePort | LoadBalancer
     nodePort: 0                                  # optional pin when serviceType=NodePort
     image:
-      repository: ghcr.io/balaji-singh/owlpane-ndm-flow
+      repository: ghcr.io/owlpane/owlpane-ndm-flow
       tag: "0.1.0"
       pullPolicy: IfNotPresent
     resources:

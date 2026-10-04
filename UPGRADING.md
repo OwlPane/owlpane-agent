@@ -3,7 +3,7 @@
 ## Zero-downtime upgrade
 
 1. Note current chart version: `helm list -n owlpane`
-2. `helm upgrade owlpane oci://ghcr.io/balaji-singh/owlpane-agent --version <chart-version> -n owlpane -f your-values.yaml --reset-values`
+2. `helm upgrade owlpane oci://ghcr.io/owlpane/owlpane-agent --version <chart-version> -n owlpane -f your-values.yaml --reset-values`
 
 ### 0.1.3
 
@@ -39,7 +39,7 @@ Changing `cluster.name` creates a new cluster identity in the console.
 
 ### 0.2.0
 
-- New optional `ndm` component: polls network devices (routers, switches, firewalls) over SNMP v2c/v3 plus ICMP ping and reports `snmp.if.*`, `snmp.cpu.util`, `snmp.memory.used_pct`, `owlpane.ping.*` metrics and `owlpane.ndm.*` inventory logs. Off by default; `ndm.devices` lists targets and credentials come from Secrets you create (`communitySecret` / `v3.userSecret`…), never from values. The pod mounts no service-account token and needs no Kubernetes RBAC. Requires the `ghcr.io/balaji-singh/owlpane-ndm` image (published on `ndm-v*` tags) or your own build of `docker/ndm`.
+- New optional `ndm` component: polls network devices (routers, switches, firewalls) over SNMP v2c/v3 plus ICMP ping and reports `snmp.if.*`, `snmp.cpu.util`, `snmp.memory.used_pct`, `owlpane.ping.*` metrics and `owlpane.ndm.*` inventory logs. Off by default; `ndm.devices` lists targets and credentials come from Secrets you create (`communitySecret` / `v3.userSecret`…), never from values. The pod mounts no service-account token and needs no Kubernetes RBAC. Requires the `ghcr.io/owlpane/owlpane-ndm` image (published on `ndm-v*` tags) or your own build of `docker/ndm`.
 
 ### 0.1.10
 
