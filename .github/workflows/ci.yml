@@ -13,3 +13,4 @@ jobs:
       - run: ./scripts/test-object-scrub.sh
       - run: ./scripts/test-footprint.sh
       - run: ./scripts/test-ndm.sh
+      - run: ./scripts/test-reuse-values.sh

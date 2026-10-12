@@ -27,6 +27,7 @@ Changing `cluster.name` creates a new cluster identity in the console.
 - `scripts/test-object-scrub.sh` runs the real receiver against a fake API server holding secrets and fails if any leaves the node.
 - **Carbon profiles**: optional `-f values-carbon.yaml` (estimated), `-f values-carbon-measured.yaml` (Kepler), or `-f values-carbon-onprem.yaml` (example region/`extraEnv`). Set `carbon.region` when cloud metadata is unavailable; it is merged into `OTEL_RESOURCE_ATTRIBUTES` on the node agent.
 - Templates use merged defaults so `helm upgrade --reuse-values` from pre-0.3.0 releases no longer nil-panics on missing `standaloneCollector` / `nodeAgent.hostmetrics` keys.
+- `scripts/test-reuse-values.sh` (CI) renders the current templates with the values of 0.3.1 and 0.3.2, as `--reuse-values` does, so a template that reads a key those releases lack fails in CI instead of on your upgrade. Add each new release tag to its `RELEASES` list.
 - **Release note:** 0.3.2 was released from a side branch and does not contain the security fix above; 0.3.3 contains it and everything in 0.3.2. If you run 0.3.2 or earlier, upgrade.
 
 ### 0.3.1
