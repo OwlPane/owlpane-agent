@@ -1,0 +1,13 @@
+# Example on-prem / bare-metal: manual region + host type when resourcedetection has no cloud API.
+# Merge with values-carbon.yaml or set carbon.region there instead.
+#
+# When extraEnv sets OTEL_RESOURCE_ATTRIBUTES, it replaces the chart-injected line (resourcedetection
+# env detector reads it first). Uncomment and edit:
+
+# nodeAgent:
+#   extraEnv:
+#     - name: OTEL_RESOURCE_ATTRIBUTES
+#       value: "host.name=$(K8S_NODE_NAME),cloud.provider=onprem,cloud.region=eu-central,host.type=server"
+
+carbon:
+  region: eu-central

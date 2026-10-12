@@ -21,13 +21,17 @@
 
 Changing `cluster.name` creates a new cluster identity in the console.
 
-### Unreleased
+### 0.3.3
+
 - **Security fix:** the cluster collector now removes, on the node and before export, ConfigMap values, the `kubectl.kubernetes.io/last-applied-configuration` annotation and the literal `value` of container env vars in pod specs (`transform/strip_object_bodies`). Earlier versions sent whole objects. Still sent: ConfigMap key names, env var names and `valueFrom` references (the console lists key names and shows which ConfigMaps a pod uses), tolerations, images and the rest of the spec. If you ran an earlier version, ask your Owlpane contact to purge stored object logs for your cluster.
 - `scripts/test-object-scrub.sh` runs the real receiver against a fake API server holding secrets and fails if any leaves the node.
+- **Carbon profiles**: optional `-f values-carbon.yaml` (estimated), `-f values-carbon-measured.yaml` (Kepler), or `-f values-carbon-onprem.yaml` (example region/`extraEnv`). Set `carbon.region` when cloud metadata is unavailable; it is merged into `OTEL_RESOURCE_ATTRIBUTES` on the node agent.
+- Templates use merged defaults so `helm upgrade --reuse-values` from pre-0.3.0 releases no longer nil-panics on missing `standaloneCollector` / `nodeAgent.hostmetrics` keys.
+- **Release note:** 0.3.2 was released from a side branch and does not contain the security fix above; 0.3.3 contains it and everything in 0.3.2. If you run 0.3.2 or earlier, upgrade.
 
 ### 0.3.1
 
-- Upgrading from chart **&lt; 0.3.0** with `--reuse-values` alone can miss new keys (`nodeAgent.hostmetrics`, `standaloneCollector`, `carbon`). Prefer `helm upgrade … -f values.yaml` (ship defaults from the chart) plus your overrides, or merge your saved values with the current `values.yaml` before upgrade.
+- Upgrading from chart **&lt; 0.3.0** with `--reuse-values` alone can miss new keys (`nodeAgent.hostmetrics`, `standaloneCollector`, `carbon`). Prefer `helm upgrade … -f values.yaml` (ship defaults from the chart) plus your overrides, or merge your saved values with the current `values.yaml` before upgrade. Chart **0.3.2+** is safer with `--reuse-values` for those keys.
 - Optional **Kepler** measured node power (`carbon.kepler.enabled`, default **false**): deploys Kepler **v0.12.0** as a privileged host-network DaemonSet and adds a `prometheus/kepler` scrape on the node agent (`kepler_node_cpu_watts` → Owlpane Carbon **measured** mode). Review host `/proc` and `/sys` mounts and privileged caps before enabling in production; see README "Security".
 - Optional **GPU metrics** (`carbon.gpu.enabled`, default **false**): adds a `prometheus/gpu` scrape on the node agent for the NVIDIA DCGM exporter you already run (`DCGM_FI_DEV_POWER_USAGE`, `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_FB_USED`, kept by `metric_relabel_configs`, tagged `service.name=dcgm-exporter` and the node name). Nothing is deployed and no privileges are added. The exporter must be reachable at `<node IP>:carbon.gpu.port` (default 9400); metric names are for dcgm-exporter 3.x and are unverified against your version.
 
