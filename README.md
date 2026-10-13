@@ -11,8 +11,8 @@ metrics arrive with `k8s.cluster.name` and your project key.
 ```bash
 kubectl create namespace owlpane
 kubectl -n owlpane create secret generic owlpane-ingest --from-literal=key=owl_ing_YOUR_KEY
-curl -fsSL https://raw.githubusercontent.com/balaji-singh/owlpane-agent/agent-v0.3.2/values-carbon.yaml -o values-carbon.yaml
-helm install owlpane oci://ghcr.io/balaji-singh/owlpane-agent --version 0.3.2 -n owlpane \
+curl -fsSL https://raw.githubusercontent.com/OwlPane/owlpane-agent/agent-v0.3.2/values-carbon.yaml -o values-carbon.yaml
+helm install owlpane oci://ghcr.io/owlpane/owlpane-agent --version 0.3.2 -n owlpane \
   -f values-carbon.yaml \
   --set endpoint=https://ingest.example.com \
   --set apiEndpoint=https://api.example.com \
@@ -50,7 +50,7 @@ The chart then renders a namespaced `Role`/`RoleBinding` per listed namespace an
 Releases are signed keylessly with cosign; the signature lives in the registry next to the chart:
 
 ```bash
-cosign verify ghcr.io/balaji-singh/owlpane-agent:0.3.2 \
+cosign verify ghcr.io/owlpane/owlpane-agent:0.3.2 \
   --certificate-identity-regexp 'https://github.com/.*/owlpane-agent/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -98,7 +98,7 @@ Off by default. When `networkCollector.enabled=true` the chart runs a DaemonSet 
 
 Namespace capture filters are not applied by the conntrack loop (it is node-scoped). Port filters are `networkCollector.captureFilters.ports`.
 
-Optional `networkCollector.ebpfCapture.enabled=true` (with `imagePublished=true`) runs a separate privileged DaemonSet using `ghcr.io/balaji-singh/network-ebpf` — **v0.1.0 is a bootstrap** host `/proc` sampler (`owlpane.flow.source=ebpf-capture`), not full CO-RE packet capture.
+Optional `networkCollector.ebpfCapture.enabled=true` (with `imagePublished=true`) runs a separate privileged DaemonSet using `ghcr.io/owlpane/network-ebpf` — **v0.1.0 is a bootstrap** host `/proc` sampler (`owlpane.flow.source=ebpf-capture`), not full CO-RE packet capture.
 
 ## Network device monitoring (NDM)
 
