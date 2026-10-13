@@ -14,3 +14,4 @@ jobs:
       - run: ./scripts/test-footprint.sh
       - run: ./scripts/test-ndm.sh
       - run: ./scripts/test-reuse-values.sh
+      - run: ./scripts/test-auto-instrumentation.sh

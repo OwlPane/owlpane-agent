@@ -147,6 +147,18 @@ metadata:
   labels: []       # e.g. [{tagName: team, key: team, from: pod}]
   annotations: []
 
+# Opt-in auto-instrumentation through the upstream OpenTelemetry Operator
+# (https://github.com/open-telemetry/opentelemetry-operator). This chart does not install the Operator; install it
+# first. When enabled, the chart creates one `Instrumentation` named "owlpane" in its namespace that sends to the node
+# agent on the pod's own node (http://$(OTEL_NODE_IP):4318, OTLP over HTTP), so it needs
+# nodeAgent.otlpHostPort: true. Nothing is instrumented until a workload opts in with a pod annotation such as
+#   instrumentation.opentelemetry.io/inject-java: "<release namespace>/owlpane"
+# (also inject-nodejs, inject-python, inject-dotnet). Remove the annotation and restart the pods to roll back.
+autoInstrumentation:
+  enabled: false
+  # Share of new traces kept (parentbased_traceidratio). "1" keeps all; a parent's decision is always followed.
+  samplerRatio: "1"
+
 networkPolicy:
   enabled: false
 
