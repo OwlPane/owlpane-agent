@@ -19,8 +19,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${TAG#network-ebpf-v}"
-          IMAGE="ghcr.io/${OWNER}/network-ebpf:${VERSION}"
+          IMAGE="ghcr.io/${OWNER,,}/network-ebpf:${VERSION}"
           docker build -f images/network-ebpf/Dockerfile -t "$IMAGE" images/network-ebpf
           docker push "$IMAGE"
-          docker tag "$IMAGE" "ghcr.io/${OWNER}/network-ebpf:latest"
-          docker push "ghcr.io/${OWNER}/network-ebpf:latest"
+          docker tag "$IMAGE" "ghcr.io/${OWNER,,}/network-ebpf:latest"
+          docker push "ghcr.io/${OWNER,,}/network-ebpf:latest"
