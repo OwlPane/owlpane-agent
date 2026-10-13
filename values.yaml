@@ -2,7 +2,7 @@
 # never contains a credential. Create it with:
 #   kubectl -n owlpane create secret generic owlpane-ingest --from-literal=key=owl_ing_...
 # Install published chart (console Setup uses the same OCI ref):
-#   helm install owlpane oci://ghcr.io/owlpane/owlpane-agent --version 0.3.2 -n owlpane ...
+#   helm install owlpane oci://ghcr.io/owlpane/owlpane-agent --version 0.3.3 -n owlpane ...
 endpoint: ""                  # required, e.g. https://ingest.example.com
 apiEndpoint: ""               # Owlpane API, e.g. https://owlpane-api.example.com — enables heartbeat and, with ops.enabled, operations
 ingestKeySecret:
@@ -75,6 +75,13 @@ standaloneCollector:
 carbon:
   # Optional grid/power region when cloud metadata is unavailable (merged into OTEL_RESOURCE_ATTRIBUTES).
   region: ""
+  # GPU power for Owlpane Carbon (off by default). Owlpane does NOT deploy a GPU exporter: it scrapes the
+  # NVIDIA DCGM exporter you already run (GPU Operator or standalone) on this node, over the node IP.
+  # The exporter must be reachable at <node IP>:port (hostNetwork or hostPort). Only the three series
+  # Carbon uses are kept. Metric names are for dcgm-exporter 3.x and must be confirmed against the version you run.
+  gpu:
+    enabled: false
+    port: 9400
   kepler:
     enabled: false
     image:

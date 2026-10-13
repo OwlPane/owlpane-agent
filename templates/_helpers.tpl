@@ -30,7 +30,7 @@ otlp_http:
 {{- mergeOverwrite (dict "enabled" false "hostmetrics" (dict "enabled" true) "resourcedetection" (dict "enabled" true) "resources" (dict)) (default dict .Values.standaloneCollector) | toYaml -}}
 {{- end -}}
 {{- define "owlpane.carbonMerged" -}}
-{{- mergeOverwrite (dict "region" "" "kepler" (dict "enabled" false "port" 28282 "image" (dict "repository" "quay.io/sustainable_computing_io/kepler" "tag" "v0.12.0") "resources" (dict "requests" (dict "cpu" "50m" "memory" "128Mi") "limits" (dict "memory" "400Mi")) "tolerations" (list (dict "operator" "Exists")))) (default dict .Values.carbon) | toYaml -}}
+{{- mergeOverwrite (dict "region" "" "gpu" (dict "enabled" false "port" 9400) "kepler" (dict "enabled" false "port" 28282 "image" (dict "repository" "quay.io/sustainable_computing_io/kepler" "tag" "v0.12.0") "resources" (dict "requests" (dict "cpu" "50m" "memory" "128Mi") "limits" (dict "memory" "400Mi")) "tolerations" (list (dict "operator" "Exists")))) (default dict .Values.carbon) | toYaml -}}
 {{- end -}}
 {{- define "owlpane.nodeOtelResourceAttributes" -}}
 {{- $carbon := include "owlpane.carbonMerged" . | fromYaml -}}
