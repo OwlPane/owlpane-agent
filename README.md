@@ -90,6 +90,41 @@ Create the Secrets yourself (`kubectl create secret generic ...`); the chart nev
 access, a read-only root filesystem and no extra capabilities. `test-rbac.sh` renders this configuration and has the real
 collector validate it. Verified against throwaway Postgres 16 and Redis 7 containers: 12 Postgres and 26 Redis metrics arrived under the configured service names. Not yet verified: a Postgres over TLS, or Redis with ACL credentials.
 
+## Auto-instrumentation (opt-in)
+
+Off by default. Traces from applications without changing their code, using the upstream
+[OpenTelemetry Operator](https://github.com/open-telemetry/opentelemetry-operator). This chart does not install the
+Operator and adds no agent of its own.
+
+1. Install the OpenTelemetry Operator in the cluster.
+2. Turn the feature on. The node agent must listen on the node, because instrumented pods send to the agent on their own node:
+
+   ```yaml
+   nodeAgent:
+     otlpHostPort: true
+   autoInstrumentation:
+     enabled: true
+     samplerRatio: "1"   # share of new traces kept; a parent's decision is always followed
+   ```
+
+   The chart creates one `Instrumentation` named `owlpane` in its namespace. It sends OTLP over HTTP to
+   `http://$(OTEL_NODE_IP):4318`, where `OTEL_NODE_IP` is set by the Operator. The node agent adds the pod's
+   Kubernetes attributes, the cluster name and the environment, and applies the usual redaction before export.
+3. Opt a workload in with a pod template annotation, using the chart's namespace (here `owlpane`):
+
+   ```yaml
+   metadata:
+     annotations:
+       instrumentation.opentelemetry.io/inject-java: "owlpane/owlpane"   # or inject-nodejs, inject-python, inject-dotnet
+   ```
+
+   To roll back, remove the annotation and restart the pods. Set the annotation to `"false"` to keep a workload out
+   when its namespace opts in. Go needs extra privileges in the Operator and is not covered here.
+
+`helm template` refuses `autoInstrumentation.enabled` without `nodeAgent.otlpHostPort`, without the node agent, or with a
+`samplerRatio` outside 0 to 1, rather than install something that would drop every span.
+`./scripts/test-auto-instrumentation.sh` checks the rendering.
+
 ## Network collector
 
 Off by default. When `networkCollector.enabled=true` the chart runs a DaemonSet that reads the node's `/proc/net/tcp` and posts `owlpane.flow.*` logs (`source=conntrack`). It records endpoints and a byte placeholder, not packet payloads. Optional `networkCollector.beyla.enabled=true` adds Grafana Beyla for eBPF network **metrics** (privileged). That container does not decrypt TLS.

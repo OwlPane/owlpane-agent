@@ -1,0 +1,29 @@
+{{- $ai := .Values.autoInstrumentation | default dict -}}
+{{- if $ai.enabled }}
+{{- $na := include "owlpane.nodeAgentMerged" . | fromYaml -}}
+{{- if not $na.enabled }}{{ fail "autoInstrumentation.enabled needs the node agent (nodeAgent.enabled: true): instrumented pods send to the agent on their node" }}{{ end -}}
+{{- if not (index $na "otlpHostPort") }}{{ fail "autoInstrumentation.enabled needs nodeAgent.otlpHostPort: true so instrumented pods can reach the node agent on the node IP" }}{{ end -}}
+{{- $ratio := toString ($ai.samplerRatio | default "1") -}}
+{{- if not (regexMatch "^(0(\\.[0-9]+)?|1(\\.0+)?)$" $ratio) }}{{ fail (printf "autoInstrumentation.samplerRatio must be a number from 0 to 1, got %q" $ratio) }}{{ end }}
+# Opt-in auto-instrumentation: an Instrumentation for the upstream OpenTelemetry Operator, which must already be
+# installed. Workloads opt in per pod with instrumentation.opentelemetry.io/inject-<language>: "{{ .Release.Namespace }}/owlpane".
+# The Operator sets OTEL_NODE_IP in each instrumented container; spans go to this chart's node agent on that node,
+# which adds the pod's Kubernetes attributes, the cluster name and the environment (node-config.yaml).
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: owlpane
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "owlpane.labels" . | nindent 4 }}
+spec:
+  exporter:
+    endpoint: http://$(OTEL_NODE_IP):4318
+  env:
+    # One protocol for every language, matching the endpoint's port. Python, .NET and Go default to it already.
+    - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: http/protobuf }
+  propagators: [tracecontext, baggage]
+  sampler:
+    type: parentbased_traceidratio
+    argument: {{ $ratio | quote }}
+{{- end }}
