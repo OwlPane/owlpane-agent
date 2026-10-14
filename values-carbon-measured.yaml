@@ -1,5 +1,5 @@
 # Owlpane Carbon — measured node power via Kepler (privileged host-network DaemonSet).
-#   helm upgrade --install owlpane … -f values.yaml -f values-carbon-measured.yaml …
+#   helm upgrade --install owlpane … -f values.yaml -f values-carbon.yaml -f values-carbon-measured.yaml …
 #
 # Includes values-carbon.yaml behavior; enables Kepler scrape on the node agent.
 
