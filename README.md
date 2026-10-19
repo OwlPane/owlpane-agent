@@ -127,7 +127,7 @@ Operator and adds no agent of its own.
 
 ## Network collector
 
-Off by default. When `networkCollector.enabled=true` the chart runs a DaemonSet that reads the node's `/proc/net/tcp` and posts `owlpane.flow.*` logs (`source=conntrack`). It records endpoints and a byte placeholder, not packet payloads. Optional `networkCollector.beyla.enabled=true` adds Grafana Beyla for eBPF network **metrics** (privileged). That container does not decrypt TLS.
+Off by default. When `networkCollector.enabled=true` the chart runs a DaemonSet that reads the node's `/proc/net/tcp` and posts `owlpane.flow.*` logs (`source=conntrack`). It records endpoints and a byte placeholder, not packet payloads. Optional `networkCollector.beyla.enabled=true` adds OpenTelemetry eBPF instrumentation (Beyla) for eBPF network **metrics** (privileged). That container does not decrypt TLS.
 
 Namespace capture filters are not applied by the conntrack loop (it is node-scoped). Port filters are `networkCollector.captureFilters.ports`.
 
