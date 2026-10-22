@@ -22,6 +22,9 @@ spec:
   env:
     # One protocol for every language, matching the endpoint's port. Python, .NET and Go default to it already.
     - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: http/protobuf }
+    # Runtime boards (Observability → Runtimes) need OTLP metrics on the same gateway as traces.
+    - { name: OTEL_METRICS_EXPORTER, value: otlp }
+    - { name: OTEL_EXPORTER_OTLP_METRICS_PROTOCOL, value: http/protobuf }
   propagators: [tracecontext, baggage]
   sampler:
     type: parentbased_traceidratio

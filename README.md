@@ -25,6 +25,7 @@ Set **`apiEndpoint`** to your Owlpane API public URL so the chart can send heart
 |---|---|---|
 | cluster collector | Deployment (1) | workload state, HorizontalPodAutoscaler gauges (`k8s.hpa.current_replicas`, `desired_replicas`, `min_replicas`, `max_replicas`), PersistentVolumeClaim capacity and phase, restarts, node conditions, Kubernetes events, and optional Service/Ingress object snapshots for routing in the console |
 | node agent | DaemonSet | node, pod, container, and volume metrics from the kubelet (`k8s.volume.capacity`, `k8s.node.filesystem.usage`); host-level CPU, memory, disk, load, network and filesystem metrics from the node OS (`hostmetrics`); cloud region and instance type detection (`resourcedetection`); an OTLP receiver applications can send to; optional container logs |
+| auto-instrumentation | Operator `Instrumentation` | When enabled, injects OTel into pods (Java, Node, Python, .NET, Go) with **traces + runtime metrics** OTLP to the node agent — feeds **Observability → Runtimes**. See [docs/runtime-telemetry.md](docs/runtime-telemetry.md). |
 | ops runner | Deployment (1) | When `apiEndpoint` is set: heartbeat + poll for queued operations (`ops.enabled` adds RBAC for apply) |
 
 ## What it is allowed to do

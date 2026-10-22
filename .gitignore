@@ -4,3 +4,4 @@ dist/
 *.log
 .DS_Store
 scripts/.helm-test-venv/
+*.tgz
