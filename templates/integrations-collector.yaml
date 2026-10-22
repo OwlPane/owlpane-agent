@@ -18,8 +18,13 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/integrations-config.yaml") . | sha256sum | trunc 16 }}
     spec:
+      {{- if include "owlpane.integrationsK8sScrape" . }}
+      serviceAccountName: {{ include "owlpane.integrationsSa" . }}
+      automountServiceAccountToken: true
+      {{- else }}
       # No Kubernetes API access is needed to read a database, so this pod uses the namespace's default account.
       automountServiceAccountToken: false
+      {{- end }}
       securityContext: { runAsNonRoot: true, runAsUser: 10001, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: collector

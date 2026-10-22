@@ -13,6 +13,13 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- if not .Values.endpoint }}{{ fail "endpoint is required (your Owlpane ingest URL)" }}{{ end -}}
 {{- if not .Values.cluster.name }}{{ fail "cluster.name is required" }}{{ end -}}
 {{- end -}}
+{{- define "owlpane.prometheusPodLabelMeta" -}}
+{{- printf "__meta_kubernetes_pod_label_%s" (replace "." "_" .) -}}
+{{- end -}}
+{{- define "owlpane.integrationsK8sScrape" -}}
+{{- gt (len (default list .Values.integrations.kubernetesScrapes)) 0 -}}
+{{- end -}}
+{{- define "owlpane.integrationsSa" -}}owlpane-integrations{{- end -}}
 {{- define "owlpane.exporter" -}}
 otlp_http:
   endpoint: {{ .Values.endpoint | trimSuffix "/" | quote }}

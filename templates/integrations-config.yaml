@@ -1,5 +1,5 @@
 {{- if .Values.integrations.enabled }}
-{{- $has := or (gt (len .Values.integrations.postgres) 0) (gt (len .Values.integrations.redis) 0) (gt (len .Values.integrations.mysql) 0) (gt (len .Values.integrations.mongodb) 0) (gt (len .Values.integrations.kafka) 0) (gt (len .Values.integrations.rabbitmq) 0) (gt (len .Values.integrations.nginx) 0) (gt (len .Values.integrations.cloudScrapes) 0) }}
+{{- $has := or (gt (len .Values.integrations.postgres) 0) (gt (len .Values.integrations.redis) 0) (gt (len .Values.integrations.mysql) 0) (gt (len .Values.integrations.mongodb) 0) (gt (len .Values.integrations.kafka) 0) (gt (len .Values.integrations.rabbitmq) 0) (gt (len .Values.integrations.nginx) 0) (gt (len .Values.integrations.cloudScrapes) 0) (gt (len (default list .Values.integrations.kubernetesScrapes)) 0) }}
 {{- if not $has }}{{ fail "integrations.enabled is true but no integration targets are configured" }}{{ end }}
 apiVersion: v1
 kind: ConfigMap
@@ -80,6 +80,35 @@ data:
               static_configs:
                 - targets: {{ toJson $c.targets }}
       {{- end }}
+      {{- range $i, $k := .Values.integrations.kubernetesScrapes }}
+      prometheus/k8s{{ $i }}:
+        config:
+          scrape_configs:
+            - job_name: {{ $k.name | quote }}
+              scrape_interval: {{ $.Values.integrations.collectionInterval }}
+              metrics_path: {{ default "/metrics" $k.metricsPath | quote }}
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces:
+                    names: [{{ $k.namespace | quote }}]
+              relabel_configs:
+                {{- range $lk, $lv := $k.matchLabels }}
+                - action: keep
+                  source_labels: [{{ include "owlpane.prometheusPodLabelMeta" $lk | quote }}]
+                  regex: {{ $lv | quote }}
+                {{- end }}
+                {{- if $k.portName }}
+                - action: keep
+                  source_labels: [__meta_kubernetes_pod_container_port_name]
+                  regex: {{ $k.portName | quote }}
+                {{- end }}
+                - action: replace
+                  source_labels: [__meta_kubernetes_namespace]
+                  target_label: k8s.namespace.name
+                - action: replace
+                  source_labels: [__meta_kubernetes_pod_name]
+                  target_label: k8s.pod.name
+      {{- end }}
     processors:
       memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
       {{- range $i, $p := .Values.integrations.postgres }}
@@ -146,6 +175,14 @@ data:
           - { key: k8s.cluster.name, value: {{ $.Values.cluster.name | quote }}, action: upsert }
           - { key: deployment.environment.name, value: {{ $.Values.environment | quote }}, action: insert }
       {{- end }}
+      {{- range $i, $k := .Values.integrations.kubernetesScrapes }}
+      resource/k8s{{ $i }}:
+        attributes:
+          - { key: service.name, value: {{ $k.name | quote }}, action: upsert }
+          - { key: cloud.provider, value: {{ $k.provider | quote }}, action: upsert }
+          - { key: k8s.cluster.name, value: {{ $.Values.cluster.name | quote }}, action: upsert }
+          - { key: deployment.environment.name, value: {{ $.Values.environment | quote }}, action: insert }
+      {{- end }}
       batch: { send_batch_size: 1000, timeout: 10s }
     exporters:
       {{- include "owlpane.exporter" . | nindent 6 }}
@@ -201,6 +238,12 @@ data:
         metrics/cloud{{ $i }}:
           receivers: [prometheus/cloud{{ $i }}]
           processors: [memory_limiter, resource/cloud{{ $i }}, batch]
+          exporters: [otlp_http]
+        {{- end }}
+        {{- range $i, $k := .Values.integrations.kubernetesScrapes }}
+        metrics/k8s{{ $i }}:
+          receivers: [prometheus/k8s{{ $i }}]
+          processors: [memory_limiter, resource/k8s{{ $i }}, batch]
           exporters: [otlp_http]
         {{- end }}
 {{- end }}

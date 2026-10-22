@@ -1,0 +1,32 @@
+{{- if and .Values.integrations.enabled (include "owlpane.integrationsK8sScrape" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "owlpane.integrationsSa" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "owlpane.rbacId" . }}-integrations-discovery
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/metrics, services, endpoints, pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "owlpane.rbacId" . }}-integrations-discovery
+  labels: {{- include "owlpane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "owlpane.rbacId" . }}-integrations-discovery
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "owlpane.integrationsSa" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

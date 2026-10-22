@@ -320,6 +320,15 @@ integrations:
   nginx: []
   # Cloud: scrape a Prometheus-format exporter (YACE, stackdriver_exporter, azure_metrics_exporter, …)
   cloudScrapes: []
+  # In-cluster Prometheus targets via Kubernetes pod SD (no extra Services required — e.g. Argo CD metrics ports).
+  kubernetesScrapes: []
+  #  - name: argocd-application-controller
+  #    provider: kubernetes
+  #    namespace: argocd
+  #    matchLabels:
+  #      app.kubernetes.io/name: argocd-application-controller
+  #    portName: metrics
+  #    metricsPath: /metrics
   #  - name: orders-db                 # shown as the service name
   #    endpoint: orders-db.default.svc:5432
   #    databases: []                   # empty = all
